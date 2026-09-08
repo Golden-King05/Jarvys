@@ -10,8 +10,9 @@ that owns your account and assistant settings, so anything you customize
 - `server/` — Node.js + Express backend, using SQLite (via `@libsql/client`,
   which works against a local file for dev and a hosted Turso database in
   production with no code changes). Owns accounts (email + password, JWT
-  sessions) and per-account assistant settings. Also exposes a stub
-  `/assistant/chat` endpoint to wire a real model into later.
+  sessions) and per-account assistant settings. `/assistant/chat` calls an
+  open-source model on Groq's free tier when `GROQ_API_KEY` is set, and
+  falls back to echoing your message when it isn't.
 - `app/` — Expo (React Native) client. One codebase that runs as an iOS app
   and as a web app (usable on any PC via the browser). Handles login/signup,
   a basic chat screen, and a settings screen that reads/writes the synced
@@ -65,6 +66,25 @@ Note: Render's free tier spins the server down after inactivity, so the
 first request after a quiet period takes ~30–50 seconds to wake back up —
 normal, not a bug.
 
+## Giving it a real brain (free)
+
+By default `/assistant/chat` just echoes your message back. To make it
+actually respond, get a free API key from **[Groq](https://groq.com)**
+(no credit card, generous rate limits, and it serves current open-weight
+models like Llama 3.3 70B on very fast hardware):
+
+1. Sign up at console.groq.com and create an API key.
+2. Add it as an environment variable:
+   - Local dev: put `GROQ_API_KEY=...` in `server/.env`.
+   - Hosted on Render: add `GROQ_API_KEY` in the service's Environment tab.
+3. That's it — `/assistant/chat` will start sending your message (plus your
+   assistant name and instructions from Settings as a system prompt) to
+   Groq and returning the real reply.
+
+`GROQ_MODEL` is optional if you want to try a different model than the
+default (`llama-3.3-70b-versatile`) — see console.groq.com for the current
+list of hosted models.
+
 ## Running the app
 
 ```bash
@@ -107,7 +127,5 @@ than on the device.
 
 ## What's stubbed / not built yet
 
-- `/assistant/chat` just echoes your message back — swap in a real model
-  call there.
 - No password reset, email verification, or refresh-token rotation yet.
 - No push notifications, background tasks, or offline queueing.

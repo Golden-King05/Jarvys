@@ -13,3 +13,5 @@ services:
         sync: false
       - key: DATABASE_AUTH_TOKEN
         sync: false
+      - key: GROQ_API_KEY
+        sync: false

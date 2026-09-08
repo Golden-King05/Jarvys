@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db, type AssistantSettingsRow } from "../db.js";
+import { getAssistantReply } from "../llm.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 
 export const assistantRouter = Router();
@@ -74,9 +75,6 @@ const chatSchema = z.object({
   message: z.string().min(1).max(4000),
 });
 
-// Placeholder reply endpoint: wire this up to a real model later. For now it
-// echoes the message back so the client <-> server <-> account round trip
-// (and per-account settings) can be exercised end to end.
 assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -84,7 +82,14 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
   }
 
   const row = await getSettingsRow(req.userId!);
-  res.json({
-    reply: `${row!.assistant_name}: I heard "${parsed.data.message}". (No model wired up yet.)`,
-  });
+  try {
+    const reply = await getAssistantReply({
+      assistantName: row!.assistant_name,
+      instructions: row!.instructions,
+      message: parsed.data.message,
+    });
+    res.json({ reply });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Assistant request failed" });
+  }
 });
