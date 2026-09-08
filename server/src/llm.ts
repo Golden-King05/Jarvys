@@ -318,7 +318,18 @@ export async function getAssistantReply(params: {
       usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null;
 
     if (!message?.tool_calls || message.tool_calls.length === 0) {
-      const reply = message?.content ?? "(empty response from model)";
+      let reply = message?.content ?? "";
+      if (!reply.trim()) {
+        // Extended thinking can burn the entire (Groq free-tier-capped)
+        // output budget on internal reasoning with nothing left for the
+        // actual answer — confirmed happening on a hard puzzle at
+        // reasoning_effort "default". Say so plainly instead of an empty
+        // bubble; there's no larger budget to retry with on this tier.
+        reply =
+          reasoningEffort === "default"
+            ? "I spent this whole reply thinking it through and didn't have room left to write the answer — Groq's free tier caps a single reply too low for both on something this hard. Try asking for a quick answer instead, or break it into smaller questions."
+            : "(empty response from model)";
+      }
       return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit, thinkingRequest: null };
     }
 
