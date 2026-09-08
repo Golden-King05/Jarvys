@@ -1,3 +1,5 @@
+import { searchWikipedia } from "./wikipedia.js";
+
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 
@@ -9,6 +11,9 @@ const CONTEXT_WINDOW_TOKENS = Number(process.env.GROQ_CONTEXT_WINDOW ?? 131072);
 // the context window, we drop the oldest turns before sending — a simple
 // sliding-window "compression" so a long chat never hits a hard API error.
 const COMPRESSION_THRESHOLD_RATIO = 0.75;
+
+// Safety cap on tool-call round trips for a single user message.
+const MAX_TOOL_ITERATIONS = 4;
 
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -35,9 +40,54 @@ export interface ChatResult {
   rateLimit: DailyRateLimit | null;
 }
 
+interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+type GroqMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; name: string; content: string };
+
 interface GroqChatResponse {
-  choices: { message: { content: string } }[];
+  choices: { message: { content: string | null; tool_calls?: ToolCall[] } }[];
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "search_wikipedia",
+      description:
+        "Search Wikipedia and return a short summary of the most relevant article. Use this for factual questions about topics, people, places, events, or concepts you should look up rather than guess at.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "What to search for on Wikipedia." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+];
+
+async function executeTool(call: ToolCall): Promise<unknown> {
+  if (call.function.name !== "search_wikipedia") {
+    return { error: `Unknown tool: ${call.function.name}` };
+  }
+  let args: { query?: string };
+  try {
+    args = JSON.parse(call.function.arguments);
+  } catch {
+    return { error: "Could not parse tool arguments" };
+  }
+  if (!args.query) {
+    return { error: "Missing required 'query' argument" };
+  }
+  return searchWikipedia(args.query);
 }
 
 // No real tokenizer on hand server-side; a rough chars/4 estimate is only used
@@ -67,6 +117,7 @@ export async function getAssistantReply(params: {
   const systemPrompt = [
     `You are ${params.assistantName}, a helpful personal assistant.`,
     "Reply in plain conversational text — no markdown (no **bold**, headers, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
+    "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -91,49 +142,81 @@ export async function getAssistantReply(params: {
     droppedMessages += 2;
   }
 
-  const res = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
-        { role: "user", content: params.message },
-      ],
-    }),
-  });
+  const messages: GroqMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...history.map((turn): GroqMessage => ({ role: turn.role, content: turn.content })),
+    { role: "user", content: params.message },
+  ];
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Groq request failed (${res.status}): ${detail}`);
+  let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let rateLimit: DailyRateLimit | null = null;
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const res = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        tools: TOOLS,
+        tool_choice: "auto",
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Groq request failed (${res.status}): ${detail}`);
+    }
+
+    const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
+    const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
+    if (limitRequestsHeader && remainingRequestsHeader) {
+      rateLimit = {
+        limitRequests: Number(limitRequestsHeader),
+        remainingRequests: Number(remainingRequestsHeader),
+      };
+    }
+
+    const data = (await res.json()) as GroqChatResponse;
+    if (data.usage) {
+      usageTotals = {
+        promptTokens: usageTotals.promptTokens + data.usage.prompt_tokens,
+        completionTokens: usageTotals.completionTokens + data.usage.completion_tokens,
+        totalTokens: usageTotals.totalTokens + data.usage.total_tokens,
+      };
+    }
+
+    const message = data.choices[0]?.message;
+    const usage: ChatUsage | null =
+      usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null;
+
+    if (!message?.tool_calls || message.tool_calls.length === 0) {
+      const reply = message?.content ?? "(empty response from model)";
+      return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit };
+    }
+
+    messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
+    for (const call of message.tool_calls) {
+      const result = await executeTool(call);
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: JSON.stringify(result),
+      });
+    }
   }
 
-  const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
-  const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
-  const rateLimit: DailyRateLimit | null =
-    limitRequestsHeader && remainingRequestsHeader
-      ? {
-          limitRequests: Number(limitRequestsHeader),
-          remainingRequests: Number(remainingRequestsHeader),
-        }
-      : null;
-
-  const data = (await res.json()) as GroqChatResponse;
-  const reply = data.choices[0]?.message.content ?? "(empty response from model)";
-  const usage: ChatUsage | null = data.usage
-    ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-        contextWindow: CONTEXT_WINDOW_TOKENS,
-      }
-    : null;
-
-  return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit };
+  return {
+    reply: "I was looking into that but couldn't wrap it up — could you try asking again?",
+    usage: usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null,
+    compressed: droppedMessages > 0,
+    droppedMessages,
+    rateLimit,
+  };
 }
 
 const GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
