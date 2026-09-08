@@ -82,7 +82,7 @@ models like Llama 3.3 70B on very fast hardware):
    Groq and returning the real reply.
 
 `GROQ_MODEL` is optional if you want to try a different model than the
-default (`llama-3.3-70b-versatile`) — see console.groq.com for the current
+default (`openai/gpt-oss-120b`) — see console.groq.com for the current
 list of hosted models.
 
 ## Talking to it instead of typing
