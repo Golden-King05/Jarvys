@@ -15,14 +15,19 @@ function toApiSettings(row: AssistantSettingsRow) {
   };
 }
 
+async function getSettingsRow(userId: string) {
+  const result = await db.execute({
+    sql: "SELECT * FROM assistant_settings WHERE user_id = ?",
+    args: [userId],
+  });
+  return result.rows[0] as unknown as AssistantSettingsRow | undefined;
+}
+
 // GET the signed-in account's assistant settings. Any device that logs into
 // the same account reads the same row here, which is what keeps
 // personalization in sync across iOS and PC.
-assistantRouter.get("/settings", (req: AuthedRequest, res) => {
-  const row = db
-    .prepare("SELECT * FROM assistant_settings WHERE user_id = ?")
-    .get(req.userId) as AssistantSettingsRow | undefined;
-
+assistantRouter.get("/settings", async (req: AuthedRequest, res) => {
+  const row = await getSettingsRow(req.userId!);
   if (!row) {
     return res.status(404).json({ error: "Settings not found" });
   }
@@ -35,15 +40,13 @@ const settingsSchema = z.object({
   preferences: z.record(z.unknown()).optional(),
 });
 
-assistantRouter.put("/settings", (req: AuthedRequest, res) => {
+assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
   }
 
-  const current = db
-    .prepare("SELECT * FROM assistant_settings WHERE user_id = ?")
-    .get(req.userId) as AssistantSettingsRow | undefined;
+  const current = await getSettingsRow(req.userId!);
   if (!current) {
     return res.status(404).json({ error: "Settings not found" });
   }
@@ -56,16 +59,15 @@ assistantRouter.put("/settings", (req: AuthedRequest, res) => {
       : current.preferences_json,
   };
 
-  db.prepare(
-    `UPDATE assistant_settings
-     SET assistant_name = ?, instructions = ?, preferences_json = ?, updated_at = datetime('now')
-     WHERE user_id = ?`
-  ).run(next.assistant_name, next.instructions, next.preferences_json, req.userId);
+  await db.execute({
+    sql: `UPDATE assistant_settings
+          SET assistant_name = ?, instructions = ?, preferences_json = ?, updated_at = datetime('now')
+          WHERE user_id = ?`,
+    args: [next.assistant_name, next.instructions, next.preferences_json, req.userId!],
+  });
 
-  const updated = db
-    .prepare("SELECT * FROM assistant_settings WHERE user_id = ?")
-    .get(req.userId) as AssistantSettingsRow;
-  res.json(toApiSettings(updated));
+  const updated = await getSettingsRow(req.userId!);
+  res.json(toApiSettings(updated!));
 });
 
 const chatSchema = z.object({
@@ -75,17 +77,14 @@ const chatSchema = z.object({
 // Placeholder reply endpoint: wire this up to a real model later. For now it
 // echoes the message back so the client <-> server <-> account round trip
 // (and per-account settings) can be exercised end to end.
-assistantRouter.post("/chat", (req: AuthedRequest, res) => {
+assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "message is required" });
   }
 
-  const row = db
-    .prepare("SELECT * FROM assistant_settings WHERE user_id = ?")
-    .get(req.userId) as AssistantSettingsRow;
-
+  const row = await getSettingsRow(req.userId!);
   res.json({
-    reply: `${row.assistant_name}: I heard "${parsed.data.message}". (No model wired up yet.)`,
+    reply: `${row!.assistant_name}: I heard "${parsed.data.message}". (No model wired up yet.)`,
   });
 });

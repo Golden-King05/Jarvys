@@ -1,14 +1,23 @@
-import Database from "better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
 import fs from "node:fs";
 import path from "node:path";
 
-const dbPath = process.env.DATABASE_PATH ?? "./data/jarvys.db";
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+// Local dev: a plain SQLite file (e.g. "file:./data/jarvys.db").
+// Hosted: a Turso database URL ("libsql://...") + DATABASE_AUTH_TOKEN.
+// Same client, same SQL, either way.
+const url = process.env.DATABASE_URL ?? "file:./data/jarvys.db";
 
-export const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
+if (url.startsWith("file:")) {
+  const filePath = url.slice("file:".length);
+  fs.mkdirSync(path.dirname(filePath) || ".", { recursive: true });
+}
 
-db.exec(`
+export const db: Client = createClient({
+  url,
+  authToken: process.env.DATABASE_AUTH_TOKEN,
+});
+
+await db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
