@@ -83,24 +83,69 @@ const SEARCH_WIKIPEDIA_TOOL = {
   },
 };
 
-const REQUEST_THINKING_TOOL = {
-  type: "function",
-  function: {
-    name: "request_deep_thinking",
-    description:
-      "Call this INSTEAD of answering when the question needs careful multi-step reasoning, complex math, or coding, and a quick answer risks being wrong. This asks the user for permission before spending extra time thinking it through. Do not call this for simple factual or conversational questions — use search_wikipedia or just answer those directly.",
-    parameters: {
-      type: "object",
-      properties: {
-        reason: {
-          type: "string",
-          description: "A short, user-facing reason this question needs deeper thinking.",
-        },
-      },
-      required: ["reason"],
+const DIFFICULTY_CLASSIFIER_PROMPT =
+  'Classify whether the user message needs careful multi-step reasoning to answer correctly: a logic puzzle with many interacting constraints, a nontrivial proof, competition-level math, or writing/debugging real code. Everyday questions, conversation, simple facts, and simple arithmetic do NOT count. Reply with exactly "NO" if it does not need that, or "YES: <short reason, under 12 words>" if it does. Reply with nothing else.';
+
+interface DifficultyCheck {
+  usage: ChatUsage | null;
+  rateLimit: DailyRateLimit | null;
+  thinkingRequest: ThinkingRequest | null;
+}
+
+// A model asked mid-generation to call a "please let me think harder" tool
+// just doesn't reliably do it (confirmed against qwen/qwen3.6-27b on two
+// deliberately hard test problems — it attempted both directly rather than
+// asking). A dedicated, narrow yes/no classification beforehand is a much
+// easier judgment for a model to get right consistently than "decide to
+// interrupt yourself mid-answer."
+async function checkDifficulty(apiKey: string, message: string): Promise<DifficultyCheck> {
+  const res = await fetch(GROQ_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
     },
-  },
-};
+    body: JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        { role: "system", content: DIFFICULTY_CLASSIFIER_PROMPT },
+        { role: "user", content: message },
+      ],
+      reasoning_effort: "none",
+      max_completion_tokens: 40,
+    }),
+  });
+
+  if (!res.ok) {
+    // Fail safe: if the classifier call itself has trouble, just skip
+    // straight to answering normally rather than blocking the user.
+    return { usage: null, rateLimit: null, thinkingRequest: null };
+  }
+
+  const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
+  const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
+  const rateLimit: DailyRateLimit | null =
+    limitRequestsHeader && remainingRequestsHeader
+      ? { limitRequests: Number(limitRequestsHeader), remainingRequests: Number(remainingRequestsHeader) }
+      : null;
+
+  const data = (await res.json()) as GroqChatResponse;
+  const usage: ChatUsage | null = data.usage
+    ? {
+        promptTokens: data.usage.prompt_tokens,
+        completionTokens: data.usage.completion_tokens,
+        totalTokens: data.usage.total_tokens,
+        contextWindow: CONTEXT_WINDOW_TOKENS,
+      }
+    : null;
+
+  const text = (data.choices[0]?.message.content ?? "").trim();
+  if (!/^yes/i.test(text)) {
+    return { usage, rateLimit, thinkingRequest: null };
+  }
+  const reason = text.replace(/^yes:?\s*/i, "").trim() || "This looks like it needs careful step-by-step thinking.";
+  return { usage, rateLimit, thinkingRequest: { reason } };
+}
 
 async function executeTool(call: ToolCall): Promise<unknown> {
   if (call.function.name !== "search_wikipedia") {
@@ -145,8 +190,8 @@ export async function getAssistantReply(params: {
   }
 
   // When the model itself asked to think harder and the user answered yes/no,
-  // the caller re-sends the same message with this set — skip offering the
-  // thinking tool again and just run at the chosen reasoning level.
+  // the caller re-sends the same message with this set — skip the difficulty
+  // check this time and just run at the chosen reasoning level.
   const offerThinkingTool = !params.forceReasoningEffort;
   const reasoningEffort = params.forceReasoningEffort ?? "none";
 
@@ -154,13 +199,37 @@ export async function getAssistantReply(params: {
     `You are ${params.assistantName}, a helpful personal assistant.`,
     "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
-    offerThinkingTool
-      ? "Before attempting a genuinely hard problem — a logic puzzle with many interacting constraints (e.g. a zebra-puzzle-style riddle), a nontrivial proof, competition-level math, or writing/debugging real code — call request_deep_thinking instead of trying it directly at low effort, since a rushed attempt at these is likely to be wrong. For everyday questions, simple arithmetic, or conversation, just answer normally."
-      : null,
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
     .join(" ");
+
+  // Ask a narrow yes/no question up front rather than hoping the model
+  // interrupts its own answer to flag difficulty (see checkDifficulty).
+  let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let rateLimit: DailyRateLimit | null = null;
+
+  if (offerThinkingTool) {
+    const check = await checkDifficulty(apiKey, params.message);
+    if (check.usage) {
+      usageTotals = {
+        promptTokens: check.usage.promptTokens,
+        completionTokens: check.usage.completionTokens,
+        totalTokens: check.usage.totalTokens,
+      };
+    }
+    rateLimit = check.rateLimit;
+    if (check.thinkingRequest) {
+      return {
+        reply: null,
+        usage: check.usage,
+        compressed: false,
+        droppedMessages: 0,
+        rateLimit,
+        thinkingRequest: check.thinkingRequest,
+      };
+    }
+  }
 
   let history = params.history;
   let droppedMessages = 0;
@@ -187,10 +256,7 @@ export async function getAssistantReply(params: {
     { role: "user", content: params.message },
   ];
 
-  const tools = offerThinkingTool ? [SEARCH_WIKIPEDIA_TOOL, REQUEST_THINKING_TOOL] : [SEARCH_WIKIPEDIA_TOOL];
-
-  let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-  let rateLimit: DailyRateLimit | null = null;
+  const tools = [SEARCH_WIKIPEDIA_TOOL];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const res = await fetch(GROQ_API_URL, {
@@ -209,8 +275,8 @@ export async function getAssistantReply(params: {
         // enough to trip Groq's free-tier output-tokens-per-minute cap
         // (1,000/min) after just one or two messages. "none" is documented
         // as the mode for general-purpose dialogue; only switch to
-        // "default" when the user explicitly approved deeper thinking via
-        // the request_deep_thinking tool round trip.
+        // "default" when the user explicitly approved deeper thinking (see
+        // checkDifficulty above).
         //
         // Groq enforces that 1,000/min ceiling against whatever
         // max_completion_tokens we declare, not actual usage — declaring
@@ -254,27 +320,6 @@ export async function getAssistantReply(params: {
     if (!message?.tool_calls || message.tool_calls.length === 0) {
       const reply = message?.content ?? "(empty response from model)";
       return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit, thinkingRequest: null };
-    }
-
-    if (offerThinkingTool) {
-      const thinkingCall = message.tool_calls.find((c) => c.function.name === "request_deep_thinking");
-      if (thinkingCall) {
-        let reason = "This looks like it needs careful step-by-step thinking.";
-        try {
-          const args = JSON.parse(thinkingCall.function.arguments) as { reason?: string };
-          if (args.reason) reason = args.reason;
-        } catch {
-          // keep the default reason above
-        }
-        return {
-          reply: null,
-          usage,
-          compressed: droppedMessages > 0,
-          droppedMessages,
-          rateLimit,
-          thinkingRequest: { reason },
-        };
-      }
     }
 
     messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
