@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db, type AssistantSettingsRow } from "../db.js";
-import { getAssistantReply } from "../llm.js";
+import { getAssistantReply, transcribeAudio } from "../llm.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 
 export const assistantRouter = Router();
@@ -91,5 +91,24 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
     res.json({ reply });
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Assistant request failed" });
+  }
+});
+
+const transcribeSchema = z.object({
+  audioBase64: z.string().min(1),
+  mimeType: z.string().min(1),
+});
+
+assistantRouter.post("/transcribe", async (req: AuthedRequest, res) => {
+  const parsed = transcribeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "audioBase64 and mimeType are required" });
+  }
+
+  try {
+    const text = await transcribeAudio(parsed.data.audioBase64, parsed.data.mimeType);
+    res.json({ text });
+  } catch (err) {
+    res.status(502).json({ error: err instanceof Error ? err.message : "Transcription failed" });
   }
 });

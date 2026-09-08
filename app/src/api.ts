@@ -57,4 +57,11 @@ export const api = {
       token,
       body: { message },
     }),
+
+  transcribe: (baseUrl: string, token: string, audioBase64: string, mimeType: string) =>
+    request<{ text: string }>(baseUrl, "/assistant/transcribe", {
+      method: "POST",
+      token,
+      body: { audioBase64, mimeType },
+    }),
 };

@@ -15,8 +15,8 @@ that owns your account and assistant settings, so anything you customize
   falls back to echoing your message when it isn't.
 - `app/` — Expo (React Native) client. One codebase that runs as an iOS app
   and as a web app (usable on any PC via the browser). Handles login/signup,
-  a basic chat screen, and a settings screen that reads/writes the synced
-  account settings.
+  a chat screen (type or talk to it, replies can be spoken back), and a
+  settings screen that reads/writes the synced account settings.
 
 ## Running the server
 
@@ -84,6 +84,20 @@ models like Llama 3.3 70B on very fast hardware):
 `GROQ_MODEL` is optional if you want to try a different model than the
 default (`llama-3.3-70b-versatile`) — see console.groq.com for the current
 list of hosted models.
+
+## Talking to it instead of typing
+
+The same `GROQ_API_KEY` also powers voice: tap **Talk** on the chat screen,
+say something, tap **Stop** — the app records the clip, sends it to
+`/assistant/transcribe` (Groq's Whisper model, same free tier, no extra
+setup), and sends the transcribed text as your message automatically.
+Replies are spoken back out loud by default; tap **Mute replies** to turn
+that off. No extra account or key needed beyond the Groq one above.
+
+Voice input uses the device microphone (`expo-av`) and on-device text-to-
+speech (`expo-speech` on iOS, the browser's built-in speech synthesis on
+web) — nothing else to install. The first time you tap Talk, iOS/the
+browser will ask for microphone permission.
 
 ## Running the app
 

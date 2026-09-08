@@ -6,7 +6,7 @@ import { assistantRouter } from "./routes/assistant.js";
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "15mb" })); // room for base64-encoded voice clips
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

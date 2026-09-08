@@ -7,7 +7,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.jarvys.app"
+      "bundleIdentifier": "com.jarvys.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Jarvys uses the microphone so you can talk to your assistant."
+      }
     },
     "web": {
       "bundler": "metro"
