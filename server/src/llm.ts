@@ -1,7 +1,13 @@
 import { searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
+// openai/gpt-oss-120b was the earlier default but has a documented issue
+// where it hallucinates calls to tools that don't exist (its "Harmony"
+// training format leaking through on non-Harmony-native harnesses) instead
+// of reliably calling the tools we actually define — confirmed against our
+// own search_wikipedia tool. Qwen uses standard tool-call formatting and is
+// one of Groq's own suggested alternatives.
+const GROQ_MODEL = process.env.GROQ_MODEL ?? "qwen/qwen3.6-27b";
 
 // Context window for the model above (Groq docs: console.groq.com/docs/models).
 // Override with GROQ_CONTEXT_WINDOW if you change GROQ_MODEL to something else.
