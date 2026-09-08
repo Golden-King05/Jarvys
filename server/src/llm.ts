@@ -174,11 +174,12 @@ export async function getAssistantReply(params: {
         // enough to trip Groq's free-tier output-tokens-per-minute cap
         // (1,000/min) after just one or two messages. "none" is documented
         // as the mode for general-purpose dialogue; a personal assistant
-        // chat doesn't need step-by-step reasoning shown. max_tokens keeps
-        // a single reply from requesting more than that per-minute budget
-        // on its own.
+        // chat doesn't need step-by-step reasoning shown. max_completion_tokens
+        // (max_tokens is deprecated on Groq's API and wasn't actually being
+        // enforced) keeps a single reply from requesting more than that
+        // per-minute budget on its own.
         reasoning_effort: "none",
-        max_tokens: 800,
+        max_completion_tokens: 800,
       }),
     });
 
