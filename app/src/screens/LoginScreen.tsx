@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../AuthContext";
+import { fonts } from "../theme";
 
 export default function LoginScreen() {
   const { login, register, baseUrl, setBaseUrl } = useAuth();
@@ -86,16 +87,17 @@ export default function LoginScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: "center", padding: 24, maxWidth: 420, width: "100%", alignSelf: "center" },
-  title: { fontSize: 32, fontWeight: "700", textAlign: "center" },
-  subtitle: { fontSize: 14, color: "#666", textAlign: "center", marginBottom: 24 },
-  label: { fontSize: 13, color: "#444", marginTop: 12, marginBottom: 4 },
+  title: { fontFamily: fonts.bold, fontSize: 32, textAlign: "center" },
+  subtitle: { fontFamily: fonts.regular, fontSize: 14, color: "#666", textAlign: "center", marginBottom: 24 },
+  label: { fontFamily: fonts.medium, fontSize: 13, color: "#444", marginTop: 12, marginBottom: 4 },
   input: {
+    fontFamily: fonts.regular,
     borderWidth: 1,
     borderColor: "#ccc",
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  error: { color: "#c0392b", marginTop: 12 },
+  error: { fontFamily: fonts.regular, color: "#c0392b", marginTop: 12 },
   spacing: { marginTop: 20 },
 });

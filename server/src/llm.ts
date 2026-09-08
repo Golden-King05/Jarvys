@@ -59,6 +59,7 @@ export async function getAssistantReply(params: {
 
   const systemPrompt = [
     `You are ${params.assistantName}, a helpful personal assistant.`,
+    "Reply in plain conversational text — no markdown (no **bold**, headers, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)

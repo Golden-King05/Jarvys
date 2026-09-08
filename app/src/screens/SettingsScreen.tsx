@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Button, StyleSheet, Text, TextInput, View } from "react-native";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
+import { fonts } from "../theme";
 
 export default function SettingsScreen() {
   const { baseUrl, token, logout } = useAuth();
@@ -79,8 +80,9 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  label: { fontSize: 13, color: "#444", marginTop: 12, marginBottom: 4 },
+  label: { fontFamily: fonts.medium, fontSize: 13, color: "#444", marginTop: 12, marginBottom: 4 },
   input: {
+    fontFamily: fonts.regular,
     borderWidth: 1,
     borderColor: "#ccc",
     borderRadius: 8,
@@ -88,7 +90,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   multiline: { minHeight: 100, textAlignVertical: "top" },
-  error: { color: "#c0392b", marginTop: 12 },
-  saved: { color: "#27ae60", marginTop: 12 },
+  error: { fontFamily: fonts.regular, color: "#c0392b", marginTop: 12 },
+  saved: { fontFamily: fonts.regular, color: "#27ae60", marginTop: 12 },
   spacing: { marginTop: 20 },
 });

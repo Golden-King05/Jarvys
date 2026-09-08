@@ -1,7 +1,15 @@
 import React, { useState } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import {
+  useFonts,
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from "@expo-google-fonts/inter";
 import { AuthProvider, useAuth } from "./src/AuthContext";
+import { fonts } from "./src/theme";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
@@ -41,6 +49,21 @@ function Root() {
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+  });
+
+  if (!fontsLoaded) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.flex}>
       <StatusBar style="auto" />
@@ -62,6 +85,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
-  tab: { fontSize: 16, color: "#888" },
-  tabActive: { fontSize: 16, color: "#000", fontWeight: "700" },
+  tab: { fontFamily: fonts.regular, fontSize: 16, color: "#888" },
+  tabActive: { fontFamily: fonts.semiBold, fontSize: 16, color: "#000" },
 });

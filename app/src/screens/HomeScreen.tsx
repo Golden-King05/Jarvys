@@ -10,6 +10,7 @@ import {
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
+import { fonts } from "../theme";
 
 interface Message {
   from: "you" | "assistant" | "system";
@@ -194,11 +195,11 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   messages: { flex: 1 },
-  placeholder: { color: "#888", textAlign: "center", marginTop: 40 },
-  you: { marginBottom: 8, fontWeight: "600" },
-  assistant: { marginBottom: 8 },
-  system: { marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
-  error: { color: "#c0392b", paddingHorizontal: 16 },
+  placeholder: { fontFamily: fonts.regular, color: "#888", textAlign: "center", marginTop: 40 },
+  you: { fontFamily: fonts.semiBold, marginBottom: 8 },
+  assistant: { fontFamily: fonts.regular, marginBottom: 8 },
+  system: { fontFamily: fonts.regular, marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
+  error: { fontFamily: fonts.regular, color: "#c0392b", paddingHorizontal: 16 },
   usageBox: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -216,8 +217,8 @@ const styles = StyleSheet.create({
     height: "100%",
     borderRadius: 3,
   },
-  usageText: { fontSize: 12, color: "#444", marginTop: 4 },
-  usageSubtext: { fontSize: 11, color: "#888", marginTop: 1 },
+  usageText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", marginTop: 4 },
+  usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1 },
   voiceRow: {
     flexDirection: "row",
     justifyContent: "center",
@@ -233,6 +234,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   input: {
+    fontFamily: fonts.regular,
     flex: 1,
     borderWidth: 1,
     borderColor: "#ccc",
