@@ -32,6 +32,17 @@ await db.executeMultiple(`
     preferences_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created
+    ON chat_messages(user_id, created_at);
 `);
 
 export interface UserRow {
@@ -47,4 +58,12 @@ export interface AssistantSettingsRow {
   instructions: string;
   preferences_json: string;
   updated_at: string;
+}
+
+export interface ChatMessageRow {
+  id: string;
+  user_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
 }

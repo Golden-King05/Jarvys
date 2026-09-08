@@ -22,11 +22,17 @@ export interface ChatUsage {
   contextWindow: number;
 }
 
+export interface DailyRateLimit {
+  limitRequests: number;
+  remainingRequests: number;
+}
+
 export interface ChatResult {
   reply: string;
   usage: ChatUsage | null;
   compressed: boolean;
   droppedMessages: number;
+  rateLimit: DailyRateLimit | null;
 }
 
 interface GroqChatResponse {
@@ -54,6 +60,7 @@ export async function getAssistantReply(params: {
       usage: null,
       compressed: false,
       droppedMessages: 0,
+      rateLimit: null,
     };
   }
 
@@ -105,6 +112,16 @@ export async function getAssistantReply(params: {
     throw new Error(`Groq request failed (${res.status}): ${detail}`);
   }
 
+  const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
+  const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
+  const rateLimit: DailyRateLimit | null =
+    limitRequestsHeader && remainingRequestsHeader
+      ? {
+          limitRequests: Number(limitRequestsHeader),
+          remainingRequests: Number(remainingRequestsHeader),
+        }
+      : null;
+
   const data = (await res.json()) as GroqChatResponse;
   const reply = data.choices[0]?.message.content ?? "(empty response from model)";
   const usage: ChatUsage | null = data.usage
@@ -116,7 +133,7 @@ export async function getAssistantReply(params: {
       }
     : null;
 
-  return { reply, usage, compressed: droppedMessages > 0, droppedMessages };
+  return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit };
 }
 
 const GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions";

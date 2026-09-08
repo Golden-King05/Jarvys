@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Button, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Button, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import {
   AudioModule,
   RecordingPresets,
@@ -22,6 +22,11 @@ interface UsageState {
   contextWindow: number;
 }
 
+interface RateLimitState {
+  limitRequests: number;
+  remainingRequests: number;
+}
+
 // Matches the server's COMPRESSION_THRESHOLD_RATIO (server/src/llm.ts) — kept
 // here only to estimate "messages until compression" for display, not to
 // decide anything.
@@ -31,26 +36,35 @@ export default function HomeScreen() {
   const { baseUrl, token } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(false);
   const [usage, setUsage] = useState<UsageState | null>(null);
+  const [rateLimit, setRateLimit] = useState<RateLimitState | null>(null);
   const [promptTokenHistory, setPromptTokenHistory] = useState<number[]>([]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
 
+  // Load the account's saved conversation on open, so it survives a refresh
+  // or picks up where another device left off.
+  useEffect(() => {
+    if (!token) return;
+    api
+      .getMessages(baseUrl, token)
+      .then(({ messages: stored }) => {
+        setMessages(stored.map((m) => ({ from: m.role === "user" ? "you" : "assistant", text: m.content })));
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load conversation"))
+      .finally(() => setLoadingHistory(false));
+  }, [baseUrl, token]);
+
   async function sendMessage(text: string) {
     if (!text.trim() || !token) return;
     setError(null);
-    const history = messages
-      .filter((m): m is Message & { from: "you" | "assistant" } => m.from !== "system")
-      .map((m) => ({
-        role: m.from === "you" ? ("user" as const) : ("assistant" as const),
-        content: m.text,
-      }));
     setMessages((prev) => [...prev, { from: "you", text }]);
     try {
-      const result = await api.chat(baseUrl, token, text, history);
+      const result = await api.chat(baseUrl, token, text);
       setMessages((prev) => [...prev, { from: "assistant", text: result.reply }]);
       if (!muted) speak(result.reply);
 
@@ -59,6 +73,9 @@ export default function HomeScreen() {
         setPromptTokenHistory((prev) =>
           result.compressed ? [result.usage!.promptTokens] : [...prev, result.usage!.promptTokens]
         );
+      }
+      if (result.rateLimit) {
+        setRateLimit(result.rateLimit);
       }
       if (result.compressed) {
         setMessages((prev) => [
@@ -135,6 +152,18 @@ export default function HomeScreen() {
     messagesLeftLabel = "Estimating... send a couple more messages";
   }
 
+  const rateLimitPercent = rateLimit
+    ? Math.min(100, (rateLimit.remainingRequests / rateLimit.limitRequests) * 100)
+    : 0;
+
+  if (loadingHistory) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {usage ? (
@@ -147,6 +176,26 @@ export default function HomeScreen() {
             {usagePercent.toFixed(1)}%)
           </Text>
           {messagesLeftLabel ? <Text style={styles.usageSubtext}>{messagesLeftLabel}</Text> : null}
+
+          {rateLimit ? (
+            <>
+              <Text style={[styles.usageText, styles.rateLimitLabel]}>
+                {rateLimit.remainingRequests.toLocaleString()} / {rateLimit.limitRequests.toLocaleString()}{" "}
+                messages left today (Groq's free-tier daily limit)
+              </Text>
+              <View style={styles.usageBarTrack}>
+                <View
+                  style={[
+                    styles.usageBarFill,
+                    {
+                      width: `${rateLimitPercent}%`,
+                      backgroundColor: rateLimitPercent < 10 ? "#c0392b" : "#2980b9",
+                    },
+                  ]}
+                />
+              </View>
+            </>
+          ) : null}
         </View>
       ) : null}
 
@@ -194,6 +243,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
   messages: { flex: 1 },
   placeholder: { fontFamily: fonts.regular, color: "#888", textAlign: "center", marginTop: 40 },
   you: { fontFamily: fonts.semiBold, marginBottom: 8 },
@@ -219,6 +269,7 @@ const styles = StyleSheet.create({
   },
   usageText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", marginTop: 4 },
   usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1 },
+  rateLimitLabel: { marginTop: 10 },
   voiceRow: {
     flexDirection: "row",
     justifyContent: "center",

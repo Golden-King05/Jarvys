@@ -7,11 +7,6 @@ export interface AssistantSettings {
   updatedAt: string;
 }
 
-export interface ChatTurn {
-  role: "user" | "assistant";
-  content: string;
-}
-
 export interface ChatUsage {
   promptTokens: number;
   completionTokens: number;
@@ -19,11 +14,23 @@ export interface ChatUsage {
   contextWindow: number;
 }
 
+export interface DailyRateLimit {
+  limitRequests: number;
+  remainingRequests: number;
+}
+
 export interface ChatResponse {
   reply: string;
   usage: ChatUsage | null;
   compressed: boolean;
   droppedMessages: number;
+  rateLimit: DailyRateLimit | null;
+}
+
+export interface StoredMessage {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
 async function request<T>(
@@ -70,12 +77,15 @@ export const api = {
       body: patch,
     }),
 
-  chat: (baseUrl: string, token: string, message: string, history: ChatTurn[]) =>
+  chat: (baseUrl: string, token: string, message: string) =>
     request<ChatResponse>(baseUrl, "/assistant/chat", {
       method: "POST",
       token,
-      body: { message, history },
+      body: { message },
     }),
+
+  getMessages: (baseUrl: string, token: string) =>
+    request<{ messages: StoredMessage[] }>(baseUrl, "/assistant/messages", { token }),
 
   transcribe: (baseUrl: string, token: string, audioBase64: string, mimeType: string) =>
     request<{ text: string }>(baseUrl, "/assistant/transcribe", {

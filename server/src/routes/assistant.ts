@@ -1,8 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, type AssistantSettingsRow } from "../db.js";
+import { db, type AssistantSettingsRow, type ChatMessageRow } from "../db.js";
 import { getAssistantReply, transcribeAudio } from "../llm.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
+
+// How much of the account's stored chat log to load per request. This bounds
+// both what we send to getAssistantReply (which trims further based on
+// estimated tokens) and what a client sees when it asks for history.
+const MAX_HISTORY_MESSAGES = 200;
 
 export const assistantRouter = Router();
 assistantRouter.use(requireAuth);
@@ -22,6 +28,25 @@ async function getSettingsRow(userId: string) {
     args: [userId],
   });
   return result.rows[0] as unknown as AssistantSettingsRow | undefined;
+}
+
+// Most recent MAX_HISTORY_MESSAGES rows, returned oldest-first.
+async function getChatHistory(userId: string): Promise<ChatMessageRow[]> {
+  const result = await db.execute({
+    sql: `SELECT * FROM (
+            SELECT rowid, * FROM chat_messages WHERE user_id = ?
+            ORDER BY created_at DESC, rowid DESC LIMIT ?
+          ) ORDER BY created_at ASC, rowid ASC`,
+    args: [userId, MAX_HISTORY_MESSAGES],
+  });
+  return result.rows as unknown as ChatMessageRow[];
+}
+
+async function saveChatMessage(userId: string, role: "user" | "assistant", content: string) {
+  await db.execute({
+    sql: "INSERT INTO chat_messages (id, user_id, role, content) VALUES (?, ?, ?, ?)",
+    args: [randomUUID(), userId, role, content],
+  });
 }
 
 // GET the signed-in account's assistant settings. Any device that logs into
@@ -71,17 +96,17 @@ assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
   res.json(toApiSettings(updated!));
 });
 
+// The account's saved conversation, oldest first — loaded on app open so a
+// refresh or a different device picks up where the last one left off.
+assistantRouter.get("/messages", async (req: AuthedRequest, res) => {
+  const rows = await getChatHistory(req.userId!);
+  res.json({
+    messages: rows.map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at })),
+  });
+});
+
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string(),
-      })
-    )
-    .max(200)
-    .optional(),
 });
 
 assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
@@ -91,13 +116,19 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
   }
 
   const row = await getSettingsRow(req.userId!);
+  const historyRows = await getChatHistory(req.userId!);
+
   try {
     const result = await getAssistantReply({
       assistantName: row!.assistant_name,
       instructions: row!.instructions,
       message: parsed.data.message,
-      history: parsed.data.history ?? [],
+      history: historyRows.map((r) => ({ role: r.role, content: r.content })),
     });
+
+    await saveChatMessage(req.userId!, "user", parsed.data.message);
+    await saveChatMessage(req.userId!, "assistant", result.reply);
+
     res.json(result);
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Assistant request failed" });
