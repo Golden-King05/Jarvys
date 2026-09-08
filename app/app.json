@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Jarvys",
+    "slug": "jarvys",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jarvys.app"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

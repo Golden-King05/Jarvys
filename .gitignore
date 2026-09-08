@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.env
+*.db
+*.db-journal
+
+# Expo
+.expo/
+.expo-shared/
+ios/
+android/
+web-build/
+
+# OS
+.DS_Store
