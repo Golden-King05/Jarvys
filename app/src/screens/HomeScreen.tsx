@@ -12,9 +12,19 @@ import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 
 interface Message {
-  from: "you" | "assistant";
+  from: "you" | "assistant" | "system";
   text: string;
 }
+
+interface UsageState {
+  promptTokens: number;
+  contextWindow: number;
+}
+
+// Matches the server's COMPRESSION_THRESHOLD_RATIO (server/src/llm.ts) — kept
+// here only to estimate "messages until compression" for display, not to
+// decide anything.
+const COMPRESSION_THRESHOLD_RATIO = 0.75;
 
 export default function HomeScreen() {
   const { baseUrl, token } = useAuth();
@@ -23,17 +33,41 @@ export default function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [usage, setUsage] = useState<UsageState | null>(null);
+  const [promptTokenHistory, setPromptTokenHistory] = useState<number[]>([]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
 
   async function sendMessage(text: string) {
     if (!text.trim() || !token) return;
     setError(null);
+    const history = messages
+      .filter((m): m is Message & { from: "you" | "assistant" } => m.from !== "system")
+      .map((m) => ({
+        role: m.from === "you" ? ("user" as const) : ("assistant" as const),
+        content: m.text,
+      }));
     setMessages((prev) => [...prev, { from: "you", text }]);
     try {
-      const { reply } = await api.chat(baseUrl, token, text);
-      setMessages((prev) => [...prev, { from: "assistant", text: reply }]);
-      if (!muted) speak(reply);
+      const result = await api.chat(baseUrl, token, text, history);
+      setMessages((prev) => [...prev, { from: "assistant", text: result.reply }]);
+      if (!muted) speak(result.reply);
+
+      if (result.usage) {
+        setUsage({ promptTokens: result.usage.promptTokens, contextWindow: result.usage.contextWindow });
+        setPromptTokenHistory((prev) =>
+          result.compressed ? [result.usage!.promptTokens] : [...prev, result.usage!.promptTokens]
+        );
+      }
+      if (result.compressed) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            from: "system",
+            text: `Context was getting long — trimmed ${result.droppedMessages} older message(s) to make room.`,
+          },
+        ]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to send message");
     }
@@ -83,14 +117,47 @@ export default function HomeScreen() {
     setMuted((m) => !m);
   }
 
+  const usagePercent = usage ? Math.min(100, (usage.promptTokens / usage.contextWindow) * 100) : 0;
+  const barColor = usagePercent > 90 ? "#c0392b" : usagePercent > 70 ? "#e67e22" : "#27ae60";
+
+  let messagesLeftLabel = "";
+  if (usage && promptTokenHistory.length >= 2) {
+    const first = promptTokenHistory[0];
+    const last = promptTokenHistory[promptTokenHistory.length - 1];
+    const avgGrowthPerMessage = (last - first) / (promptTokenHistory.length - 1);
+    const threshold = usage.contextWindow * COMPRESSION_THRESHOLD_RATIO;
+    if (avgGrowthPerMessage > 0) {
+      const remaining = Math.max(0, Math.ceil((threshold - last) / avgGrowthPerMessage));
+      messagesLeftLabel = `~${remaining} message${remaining === 1 ? "" : "s"} until context is trimmed (estimate)`;
+    }
+  } else if (usage) {
+    messagesLeftLabel = "Estimating... send a couple more messages";
+  }
+
   return (
     <View style={styles.container}>
+      {usage ? (
+        <View style={styles.usageBox}>
+          <View style={styles.usageBarTrack}>
+            <View style={[styles.usageBarFill, { width: `${usagePercent}%`, backgroundColor: barColor }]} />
+          </View>
+          <Text style={styles.usageText}>
+            {usage.promptTokens.toLocaleString()} / {usage.contextWindow.toLocaleString()} tokens (
+            {usagePercent.toFixed(1)}%)
+          </Text>
+          {messagesLeftLabel ? <Text style={styles.usageSubtext}>{messagesLeftLabel}</Text> : null}
+        </View>
+      ) : null}
+
       <ScrollView style={styles.messages} contentContainerStyle={{ padding: 16 }}>
         {messages.length === 0 ? (
           <Text style={styles.placeholder}>Say something to your assistant.</Text>
         ) : null}
         {messages.map((m, i) => (
-          <Text key={i} style={m.from === "you" ? styles.you : styles.assistant}>
+          <Text
+            key={i}
+            style={m.from === "you" ? styles.you : m.from === "system" ? styles.system : styles.assistant}
+          >
             {m.from === "you" ? "You: " : ""}
             {m.text}
           </Text>
@@ -130,7 +197,27 @@ const styles = StyleSheet.create({
   placeholder: { color: "#888", textAlign: "center", marginTop: 40 },
   you: { marginBottom: 8, fontWeight: "600" },
   assistant: { marginBottom: 8 },
+  system: { marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
   error: { color: "#c0392b", paddingHorizontal: 16 },
+  usageBox: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  usageBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#eee",
+    overflow: "hidden",
+  },
+  usageBarFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  usageText: { fontSize: 12, color: "#444", marginTop: 4 },
+  usageSubtext: { fontSize: 11, color: "#888", marginTop: 1 },
   voiceRow: {
     flexDirection: "row",
     justifyContent: "center",

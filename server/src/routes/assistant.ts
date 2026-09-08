@@ -73,6 +73,15 @@ assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
 
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string(),
+      })
+    )
+    .max(200)
+    .optional(),
 });
 
 assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
@@ -83,12 +92,13 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
 
   const row = await getSettingsRow(req.userId!);
   try {
-    const reply = await getAssistantReply({
+    const result = await getAssistantReply({
       assistantName: row!.assistant_name,
       instructions: row!.instructions,
       message: parsed.data.message,
+      history: parsed.data.history ?? [],
     });
-    res.json({ reply });
+    res.json(result);
   } catch (err) {
     res.status(502).json({ error: err instanceof Error ? err.message : "Assistant request failed" });
   }

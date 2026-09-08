@@ -7,6 +7,25 @@ export interface AssistantSettings {
   updatedAt: string;
 }
 
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  contextWindow: number;
+}
+
+export interface ChatResponse {
+  reply: string;
+  usage: ChatUsage | null;
+  compressed: boolean;
+  droppedMessages: number;
+}
+
 async function request<T>(
   baseUrl: string,
   path: string,
@@ -51,11 +70,11 @@ export const api = {
       body: patch,
     }),
 
-  chat: (baseUrl: string, token: string, message: string) =>
-    request<{ reply: string }>(baseUrl, "/assistant/chat", {
+  chat: (baseUrl: string, token: string, message: string, history: ChatTurn[]) =>
+    request<ChatResponse>(baseUrl, "/assistant/chat", {
       method: "POST",
       token,
-      body: { message },
+      body: { message, history },
     }),
 
   transcribe: (baseUrl: string, token: string, audioBase64: string, mimeType: string) =>
