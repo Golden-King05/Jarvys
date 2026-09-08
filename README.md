@@ -94,7 +94,7 @@ setup), and sends the transcribed text as your message automatically.
 Replies are spoken back out loud by default; tap **Mute replies** to turn
 that off. No extra account or key needed beyond the Groq one above.
 
-Voice input uses the device microphone (`expo-av`) and on-device text-to-
+Voice input uses the device microphone (`expo-audio`) and on-device text-to-
 speech (`expo-speech` on iOS, the browser's built-in speech synthesis on
 web) — nothing else to install. The first time you tap Talk, iOS/the
 browser will ask for microphone permission.
@@ -111,6 +111,11 @@ npm run ios    # runs in the iOS simulator (requires Xcode) or Expo Go
 Easiest way to see it on an actual iPhone without Xcode: install the free
 **Expo Go** app from the App Store, run `npm run start` (or `npm run ios`)
 from `app/`, and scan the QR code it prints with your phone's camera.
+**This is a live developer preview** — your PC has to be on and that
+command has to be running for Expo Go to load the app. It's not meant to
+be the permanent way to use the app on your phone; see "A permanent link
+for the web app" below for the PC side, and the note at the bottom about
+what a permanent iPhone install actually requires.
 
 On first launch, the app asks for a **Server URL** along with your email and
 password. Once the server is deployed (see "Hosting it for real" above),
@@ -129,6 +134,39 @@ Create an account once from either platform, then log into the same account
 from the other — your assistant name/instructions saved in Settings will be
 there on both, since they're stored server-side against your account rather
 than on the device.
+
+## A permanent link for the web app (free)
+
+`npm run web` only runs while your PC is on — fine for testing, not for
+"just open it anytime." To get a permanent URL for the web version that
+works with your PC off, this repo has a GitHub Actions workflow
+(`.github/workflows/deploy-web.yml`) that builds the web app and publishes
+it to GitHub Pages automatically every time `main` is updated.
+
+One-time setup (uses your existing GitHub account, no new signup):
+
+1. On GitHub, go to the repo → **Settings → Pages**.
+2. Under **Build and deployment → Source**, pick **Deploy from a branch**.
+3. Wait for the **Deploy web app to GitHub Pages** workflow to finish once
+   (check the **Actions** tab) — it creates a `gh-pages` branch the first
+   time it runs.
+4. Back in Settings → Pages, set the branch to **gh-pages** / **root**, then
+   Save.
+
+After that, the app is permanently at `https://<your-github-username>.github.io/Jarvys/`
+— open it anytime, PC on or off, no `npm run web` needed. It still talks to
+the same hosted Render server, so it's the exact same account and data.
+
+### What about a permanent app on the iPhone?
+
+Expo Go (what we've been using) is always a live developer preview — it
+needs your PC's dev server running, full stop, no way around that. A real
+"installed app icon, works anytime, no PC" experience on iPhone means
+building an actual standalone app via EAS Build and installing it through
+TestFlight — which requires an Apple Developer Program account
+(**$99/year**, Apple's fee, not optional). That's a real cost decision, so
+I haven't set it up — say the word if you want to go that route and I'll
+walk you through it.
 
 ## How the account sync works
 
