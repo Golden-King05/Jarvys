@@ -152,8 +152,11 @@ export async function getAssistantReply(params: {
 
   const systemPrompt = [
     `You are ${params.assistantName}, a helpful personal assistant.`,
-    "Reply in plain conversational text — no markdown (no **bold**, headers, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
+    "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
+    offerThinkingTool
+      ? "Before attempting a genuinely hard problem — a logic puzzle with many interacting constraints (e.g. a zebra-puzzle-style riddle), a nontrivial proof, competition-level math, or writing/debugging real code — call request_deep_thinking instead of trying it directly at low effort, since a rushed attempt at these is likely to be wrong. For everyday questions, simple arithmetic, or conversation, just answer normally."
+      : null,
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -207,13 +210,17 @@ export async function getAssistantReply(params: {
         // (1,000/min) after just one or two messages. "none" is documented
         // as the mode for general-purpose dialogue; only switch to
         // "default" when the user explicitly approved deeper thinking via
-        // the request_deep_thinking tool round trip. max_completion_tokens
-        // (max_tokens is deprecated on Groq's API and wasn't actually being
-        // enforced) keeps a reply from requesting more than the per-minute
-        // budget on its own; thinking mode gets more headroom since it
-        // needs room for the reasoning itself, not just the answer.
+        // the request_deep_thinking tool round trip.
+        //
+        // Groq enforces that 1,000/min ceiling against whatever
+        // max_completion_tokens we declare, not actual usage — declaring
+        // anything above ~1,000 gets rejected outright (confirmed: 4000
+        // here 429'd immediately even for a short reply), so this has to
+        // stay under the limit in *both* modes. It's a real ceiling on how
+        // long a single answer can be on the free tier, thinking mode
+        // included — there's no way around that without a paid tier.
         reasoning_effort: reasoningEffort,
-        max_completion_tokens: reasoningEffort === "default" ? 4000 : 800,
+        max_completion_tokens: 900,
       }),
     });
 
