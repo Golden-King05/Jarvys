@@ -1,8 +1,15 @@
 import React, { useState } from "react";
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from "expo-audio";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
-import { speak, startRecording, stopRecording, stopSpeaking } from "../voice";
+import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 
 interface Message {
   from: "you" | "assistant";
@@ -14,9 +21,10 @@ export default function HomeScreen() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(false);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder);
 
   async function sendMessage(text: string) {
     if (!text.trim() || !token) return;
@@ -40,11 +48,13 @@ export default function HomeScreen() {
 
   async function toggleRecording() {
     setError(null);
-    if (recording) {
-      setRecording(false);
+    if (recorderState.isRecording) {
       setBusy(true);
       try {
-        const { base64, mimeType } = await stopRecording();
+        await audioRecorder.stop();
+        const uri = audioRecorder.uri;
+        if (!uri) throw new Error("Recording produced no audio file");
+        const { base64, mimeType } = await readRecordingAsBase64(uri);
         if (!token) return;
         const { text } = await api.transcribe(baseUrl, token, base64, mimeType);
         await sendMessage(text);
@@ -55,8 +65,13 @@ export default function HomeScreen() {
       }
     } else {
       try {
-        await startRecording();
-        setRecording(true);
+        const permission = await AudioModule.requestRecordingPermissionsAsync();
+        if (!permission.granted) {
+          throw new Error("Microphone permission is required to talk to the assistant.");
+        }
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await audioRecorder.prepareToRecordAsync();
+        audioRecorder.record();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not start recording");
       }
@@ -87,8 +102,8 @@ export default function HomeScreen() {
 
       <View style={styles.voiceRow}>
         <Button
-          title={recording ? "Stop" : "Talk"}
-          color={recording ? "#c0392b" : undefined}
+          title={recorderState.isRecording ? "Stop" : "Talk"}
+          color={recorderState.isRecording ? "#c0392b" : undefined}
           onPress={toggleRecording}
           disabled={busy}
         />

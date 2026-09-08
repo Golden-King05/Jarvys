@@ -1,47 +1,13 @@
 import { Platform } from "react-native";
-import { Audio } from "expo-av";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import * as Speech from "expo-speech";
-
-let recording: Audio.Recording | null = null;
-
-export async function startRecording(): Promise<void> {
-  const permission = await Audio.requestPermissionsAsync();
-  if (!permission.granted) {
-    throw new Error("Microphone permission is required to talk to the assistant.");
-  }
-
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
-  });
-
-  const { recording: rec } = await Audio.Recording.createAsync(
-    Audio.RecordingOptionsPresets.HIGH_QUALITY
-  );
-  recording = rec;
-}
 
 export interface RecordingResult {
   base64: string;
   mimeType: string;
 }
 
-export async function stopRecording(): Promise<RecordingResult> {
-  if (!recording) {
-    throw new Error("No active recording");
-  }
-  const activeRecording = recording;
-  recording = null;
-
-  await activeRecording.stopAndUnloadAsync();
-  await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-
-  const uri = activeRecording.getURI();
-  if (!uri) {
-    throw new Error("Recording produced no audio file");
-  }
-
+export async function readRecordingAsBase64(uri: string): Promise<RecordingResult> {
   const mimeType = Platform.OS === "web" ? "audio/webm" : "audio/m4a";
 
   if (Platform.OS === "web") {
@@ -56,9 +22,7 @@ export async function stopRecording(): Promise<RecordingResult> {
     return { base64, mimeType };
   }
 
-  const base64 = await FileSystem.readAsStringAsync(uri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const base64 = await new File(uri).base64();
   return { base64, mimeType };
 }
 
