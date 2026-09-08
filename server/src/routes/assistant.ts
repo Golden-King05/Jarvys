@@ -107,6 +107,7 @@ assistantRouter.get("/messages", async (req: AuthedRequest, res) => {
 
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),
+  forceReasoningEffort: z.enum(["default", "none"]).optional(),
 });
 
 assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
@@ -124,10 +125,17 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
       instructions: row!.instructions,
       message: parsed.data.message,
       history: historyRows.map((r) => ({ role: r.role, content: r.content })),
+      forceReasoningEffort: parsed.data.forceReasoningEffort,
     });
 
-    await saveChatMessage(req.userId!, "user", parsed.data.message);
-    await saveChatMessage(req.userId!, "assistant", result.reply);
+    // A thinkingRequest means the model wants to ask before it answers —
+    // nothing to save yet, since there's no real answer. The client
+    // re-sends this same message with forceReasoningEffort once the user
+    // picks yes/no, and that follow-up call is what actually gets saved.
+    if (!result.thinkingRequest) {
+      await saveChatMessage(req.userId!, "user", parsed.data.message);
+      await saveChatMessage(req.userId!, "assistant", result.reply!);
+    }
 
     res.json(result);
   } catch (err) {

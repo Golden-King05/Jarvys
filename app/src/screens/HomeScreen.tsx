@@ -27,6 +27,11 @@ interface RateLimitState {
   remainingRequests: number;
 }
 
+interface PendingThinking {
+  originalMessage: string;
+  reason: string;
+}
+
 // Matches the server's COMPRESSION_THRESHOLD_RATIO (server/src/llm.ts) — kept
 // here only to estimate "messages until compression" for display, not to
 // decide anything.
@@ -43,6 +48,8 @@ export default function HomeScreen() {
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitState | null>(null);
   const [promptTokenHistory, setPromptTokenHistory] = useState<number[]>([]);
+  const [pendingThinking, setPendingThinking] = useState<PendingThinking | null>(null);
+  const [resolvingThinking, setResolvingThinking] = useState(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
 
@@ -59,35 +66,64 @@ export default function HomeScreen() {
       .finally(() => setLoadingHistory(false));
   }, [baseUrl, token]);
 
+  // Sends `text` to the assistant and applies whatever comes back — a normal
+  // reply, or a request to think harder first (handled by the caller).
+  async function requestReply(text: string, forceReasoningEffort?: "default" | "none") {
+    if (!token) return;
+    const result = await api.chat(baseUrl, token, text, forceReasoningEffort);
+
+    if (result.thinkingRequest) {
+      setPendingThinking({ originalMessage: text, reason: result.thinkingRequest.reason });
+      return;
+    }
+
+    setMessages((prev) => [...prev, { from: "assistant", text: result.reply! }]);
+    if (!muted) speak(result.reply!);
+
+    if (result.usage) {
+      setUsage({ promptTokens: result.usage.promptTokens, contextWindow: result.usage.contextWindow });
+      setPromptTokenHistory((prev) =>
+        result.compressed ? [result.usage!.promptTokens] : [...prev, result.usage!.promptTokens]
+      );
+    }
+    if (result.rateLimit) {
+      setRateLimit(result.rateLimit);
+    }
+    if (result.compressed) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          from: "system",
+          text: `Context was getting long — trimmed ${result.droppedMessages} older message(s) to make room.`,
+        },
+      ]);
+    }
+  }
+
   async function sendMessage(text: string) {
     if (!text.trim() || !token) return;
     setError(null);
+    setPendingThinking(null);
     setMessages((prev) => [...prev, { from: "you", text }]);
     try {
-      const result = await api.chat(baseUrl, token, text);
-      setMessages((prev) => [...prev, { from: "assistant", text: result.reply }]);
-      if (!muted) speak(result.reply);
-
-      if (result.usage) {
-        setUsage({ promptTokens: result.usage.promptTokens, contextWindow: result.usage.contextWindow });
-        setPromptTokenHistory((prev) =>
-          result.compressed ? [result.usage!.promptTokens] : [...prev, result.usage!.promptTokens]
-        );
-      }
-      if (result.rateLimit) {
-        setRateLimit(result.rateLimit);
-      }
-      if (result.compressed) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            from: "system",
-            text: `Context was getting long — trimmed ${result.droppedMessages} older message(s) to make room.`,
-          },
-        ]);
-      }
+      await requestReply(text);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to send message");
+    }
+  }
+
+  async function resolveThinking(choice: "default" | "none") {
+    if (!pendingThinking) return;
+    setError(null);
+    setResolvingThinking(true);
+    const { originalMessage } = pendingThinking;
+    setPendingThinking(null);
+    try {
+      await requestReply(originalMessage, choice);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to send message");
+    } finally {
+      setResolvingThinking(false);
     }
   }
 
@@ -215,6 +251,21 @@ export default function HomeScreen() {
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}
       </ScrollView>
 
+      {pendingThinking ? (
+        <View style={styles.thinkingBox}>
+          <Text style={styles.thinkingText}>{pendingThinking.reason}</Text>
+          <Text style={styles.thinkingSubtext}>Think it through more carefully before answering?</Text>
+          {resolvingThinking ? (
+            <ActivityIndicator style={styles.spacing} />
+          ) : (
+            <View style={styles.thinkingButtons}>
+              <Button title="Yes, think it through" onPress={() => resolveThinking("default")} />
+              <Button title="No, quick answer" onPress={() => resolveThinking("none")} />
+            </View>
+          )}
+        </View>
+      ) : null}
+
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <View style={styles.voiceRow}>
@@ -270,6 +321,18 @@ const styles = StyleSheet.create({
   usageText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", marginTop: 4 },
   usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1 },
   rateLimitLabel: { marginTop: 10 },
+  thinkingBox: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: "#fff8e6",
+    borderWidth: 1,
+    borderColor: "#f0d99a",
+  },
+  thinkingText: { fontFamily: fonts.medium, fontSize: 13, color: "#6b5a17" },
+  thinkingSubtext: { fontFamily: fonts.regular, fontSize: 12, color: "#8a6d1d", marginTop: 4, marginBottom: 10 },
+  thinkingButtons: { flexDirection: "row", gap: 12 },
   voiceRow: {
     flexDirection: "row",
     justifyContent: "center",
@@ -293,4 +356,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
+  spacing: { marginTop: 4 },
 });

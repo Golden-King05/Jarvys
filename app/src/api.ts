@@ -19,12 +19,17 @@ export interface DailyRateLimit {
   remainingRequests: number;
 }
 
+export interface ThinkingRequest {
+  reason: string;
+}
+
 export interface ChatResponse {
-  reply: string;
+  reply: string | null;
   usage: ChatUsage | null;
   compressed: boolean;
   droppedMessages: number;
   rateLimit: DailyRateLimit | null;
+  thinkingRequest: ThinkingRequest | null;
 }
 
 export interface StoredMessage {
@@ -77,11 +82,11 @@ export const api = {
       body: patch,
     }),
 
-  chat: (baseUrl: string, token: string, message: string) =>
+  chat: (baseUrl: string, token: string, message: string, forceReasoningEffort?: "default" | "none") =>
     request<ChatResponse>(baseUrl, "/assistant/chat", {
       method: "POST",
       token,
-      body: { message },
+      body: { message, forceReasoningEffort },
     }),
 
   getMessages: (baseUrl: string, token: string) =>

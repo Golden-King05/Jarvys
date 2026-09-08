@@ -38,12 +38,17 @@ export interface DailyRateLimit {
   remainingRequests: number;
 }
 
+export interface ThinkingRequest {
+  reason: string;
+}
+
 export interface ChatResult {
-  reply: string;
+  reply: string | null;
   usage: ChatUsage | null;
   compressed: boolean;
   droppedMessages: number;
   rateLimit: DailyRateLimit | null;
+  thinkingRequest: ThinkingRequest | null;
 }
 
 interface ToolCall {
@@ -62,23 +67,40 @@ interface GroqChatResponse {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "search_wikipedia",
-      description:
-        "Search Wikipedia and return a short summary of the most relevant article. Use this for factual questions about topics, people, places, events, or concepts you should look up rather than guess at.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "What to search for on Wikipedia." },
-        },
-        required: ["query"],
+const SEARCH_WIKIPEDIA_TOOL = {
+  type: "function",
+  function: {
+    name: "search_wikipedia",
+    description:
+      "Search Wikipedia and return a short summary of the most relevant article. Use this for factual questions about topics, people, places, events, or concepts you should look up rather than guess at.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to search for on Wikipedia." },
       },
+      required: ["query"],
     },
   },
-];
+};
+
+const REQUEST_THINKING_TOOL = {
+  type: "function",
+  function: {
+    name: "request_deep_thinking",
+    description:
+      "Call this INSTEAD of answering when the question needs careful multi-step reasoning, complex math, or coding, and a quick answer risks being wrong. This asks the user for permission before spending extra time thinking it through. Do not call this for simple factual or conversational questions — use search_wikipedia or just answer those directly.",
+    parameters: {
+      type: "object",
+      properties: {
+        reason: {
+          type: "string",
+          description: "A short, user-facing reason this question needs deeper thinking.",
+        },
+      },
+      required: ["reason"],
+    },
+  },
+};
 
 async function executeTool(call: ToolCall): Promise<unknown> {
   if (call.function.name !== "search_wikipedia") {
@@ -108,6 +130,7 @@ export async function getAssistantReply(params: {
   instructions: string;
   message: string;
   history: ChatTurn[];
+  forceReasoningEffort?: "default" | "none";
 }): Promise<ChatResult> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
@@ -117,8 +140,15 @@ export async function getAssistantReply(params: {
       compressed: false,
       droppedMessages: 0,
       rateLimit: null,
+      thinkingRequest: null,
     };
   }
+
+  // When the model itself asked to think harder and the user answered yes/no,
+  // the caller re-sends the same message with this set — skip offering the
+  // thinking tool again and just run at the chosen reasoning level.
+  const offerThinkingTool = !params.forceReasoningEffort;
+  const reasoningEffort = params.forceReasoningEffort ?? "none";
 
   const systemPrompt = [
     `You are ${params.assistantName}, a helpful personal assistant.`,
@@ -154,6 +184,8 @@ export async function getAssistantReply(params: {
     { role: "user", content: params.message },
   ];
 
+  const tools = offerThinkingTool ? [SEARCH_WIKIPEDIA_TOOL, REQUEST_THINKING_TOOL] : [SEARCH_WIKIPEDIA_TOOL];
+
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let rateLimit: DailyRateLimit | null = null;
 
@@ -167,19 +199,21 @@ export async function getAssistantReply(params: {
       body: JSON.stringify({
         model: GROQ_MODEL,
         messages,
-        tools: TOOLS,
+        tools,
         tool_choice: "auto",
         // Qwen3.6 defaults to an extended "thinking" mode that can burn
         // hundreds of output tokens on even a one-line reply — easily
         // enough to trip Groq's free-tier output-tokens-per-minute cap
         // (1,000/min) after just one or two messages. "none" is documented
-        // as the mode for general-purpose dialogue; a personal assistant
-        // chat doesn't need step-by-step reasoning shown. max_completion_tokens
+        // as the mode for general-purpose dialogue; only switch to
+        // "default" when the user explicitly approved deeper thinking via
+        // the request_deep_thinking tool round trip. max_completion_tokens
         // (max_tokens is deprecated on Groq's API and wasn't actually being
-        // enforced) keeps a single reply from requesting more than that
-        // per-minute budget on its own.
-        reasoning_effort: "none",
-        max_completion_tokens: 800,
+        // enforced) keeps a reply from requesting more than the per-minute
+        // budget on its own; thinking mode gets more headroom since it
+        // needs room for the reasoning itself, not just the answer.
+        reasoning_effort: reasoningEffort,
+        max_completion_tokens: reasoningEffort === "default" ? 4000 : 800,
       }),
     });
 
@@ -212,7 +246,28 @@ export async function getAssistantReply(params: {
 
     if (!message?.tool_calls || message.tool_calls.length === 0) {
       const reply = message?.content ?? "(empty response from model)";
-      return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit };
+      return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit, thinkingRequest: null };
+    }
+
+    if (offerThinkingTool) {
+      const thinkingCall = message.tool_calls.find((c) => c.function.name === "request_deep_thinking");
+      if (thinkingCall) {
+        let reason = "This looks like it needs careful step-by-step thinking.";
+        try {
+          const args = JSON.parse(thinkingCall.function.arguments) as { reason?: string };
+          if (args.reason) reason = args.reason;
+        } catch {
+          // keep the default reason above
+        }
+        return {
+          reply: null,
+          usage,
+          compressed: droppedMessages > 0,
+          droppedMessages,
+          rateLimit,
+          thinkingRequest: { reason },
+        };
+      }
     }
 
     messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
@@ -233,6 +288,7 @@ export async function getAssistantReply(params: {
     compressed: droppedMessages > 0,
     droppedMessages,
     rateLimit,
+    thinkingRequest: null,
   };
 }
 
