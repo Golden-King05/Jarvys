@@ -120,6 +120,14 @@ export default function MapCanvas({
     zoomFromLongitudeDelta(initialRegion ? 0.1 : DEFAULT_REGION.longitudeDelta)
   );
   const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
+  // A derived boolean rather than raw currentZoom in the poll effect below —
+  // currentZoom changes on every completed pinch/drag, and using the float
+  // directly as a dependency meant the effect tore down and rebuilt (firing
+  // an immediate re-fetch, plus a native getMapBoundaries() bridge call)
+  // on every single one of those, not just when crossing the zoom-12 line.
+  // A user pinch-zooming right around that boundary could fire a burst of
+  // overlapping fetches and bridge calls in quick succession.
+  const wikiZoomedIn = currentZoom >= MIN_WIKI_ZOOM;
 
   useEffect(() => {
     if (!showRadar) {
@@ -165,7 +173,7 @@ export default function MapCanvas({
   }, [showFlights, baseUrl, token]);
 
   useEffect(() => {
-    if (!showWikipedia || !token || currentZoom < MIN_WIKI_ZOOM) {
+    if (!showWikipedia || !token || !wikiZoomedIn) {
       setWikiClusters([]);
       lastWikiFetchBox.current = null;
       return;
@@ -200,7 +208,7 @@ export default function MapCanvas({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [showWikipedia, baseUrl, token, currentZoom]);
+  }, [showWikipedia, baseUrl, token, wikiZoomedIn]);
 
   function fitToContent() {
     if (!mapRef.current) return;
@@ -342,7 +350,7 @@ export default function MapCanvas({
       {showWikipedia
         ? wikiClusters.map((c, i) => (
             <Marker
-              key={`wiki-${i}`}
+              key={`wiki-${c.articles[0]?.pageid ?? i}`}
               coordinate={{ latitude: c.lat, longitude: c.lon }}
               onPress={() => onWikipediaClusterPress?.(c)}
               tracksViewChanges={false}

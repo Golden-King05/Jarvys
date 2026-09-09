@@ -155,6 +155,11 @@ export default function MapCanvas({
   onWikipediaClusterPressRef.current = onWikipediaClusterPress;
   const [currentZoom, setCurrentZoom] = useState(initialRegion ? 12 : 4);
   const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
+  // A derived boolean rather than raw currentZoom in the poll effect below —
+  // using the float directly as a dependency meant the effect tore down and
+  // rebuilt (firing an immediate re-fetch) on every zoomend, not just when
+  // crossing the zoom-12 line.
+  const wikiZoomedIn = currentZoom >= MIN_WIKI_ZOOM;
 
   function fitToContent(L: Leaflet, map: Leaflet) {
     if (points.length === 1) {
@@ -422,7 +427,7 @@ export default function MapCanvas({
   // Own persistent layer, same reasoning as radar/timezones above — polling
   // redraws just this layer without touching points/regions.
   useEffect(() => {
-    if (!showWikipedia || !token || currentZoom < MIN_WIKI_ZOOM) {
+    if (!showWikipedia || !token || !wikiZoomedIn) {
       loadLeaflet().then((L) => {
         const map = mapInstance.current;
         if (map && wikiLayerRef.current) {
@@ -472,7 +477,7 @@ export default function MapCanvas({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [showWikipedia, baseUrl, token, currentZoom]);
+  }, [showWikipedia, baseUrl, token, wikiZoomedIn]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }
