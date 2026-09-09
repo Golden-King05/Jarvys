@@ -441,6 +441,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     elevation: 4,
+    // Leaflet's own zoom/attribution controls carry z-index: 1000 inside a
+    // container div that doesn't establish its own stacking context on web,
+    // so without this the map's controls render above this button even
+    // though it's a later sibling.
+    zIndex: 1000,
   },
   addButtonText: { color: "#fff", fontSize: 28, lineHeight: 30, fontFamily: fonts.medium },
   tapBanner: {
@@ -455,6 +460,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     elevation: 4,
+    zIndex: 1000,
   },
   tapBannerText: { fontFamily: fonts.medium, fontSize: 13, color: "#222" },
   tapBannerCancel: { fontFamily: fonts.medium, fontSize: 13, color: "#c0392b" },
