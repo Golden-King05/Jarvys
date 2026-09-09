@@ -1418,6 +1418,12 @@ export async function getAssistantReply(params: {
       });
       return { ...result, provider: "gemini", providerNote: null };
     } catch (err) {
+      // The user's chosen default failing is worth knowing why (bad request,
+      // Gemini's own rate limit, a network blip) even though the reply text
+      // just says "unavailable" — this was previously swallowed entirely,
+      // making a report like "it used Groq even though I set Gemini" and
+      // "Gemini hit some other error" indistinguishable from server logs.
+      console.error("Gemini (preferred) failed, falling back to Groq:", err);
       if (!groqKey) {
         return blankResult(
           "Gemini (your default) is unavailable right now, and no backup model is configured.",
@@ -1437,6 +1443,7 @@ export async function getAssistantReply(params: {
         return { ...result, providerNote: "Gemini (your default) was unavailable, so this reply came from Groq instead." };
       } catch (groqErr) {
         if (!(groqErr instanceof GroqRateLimitError)) throw groqErr;
+        console.error("Groq backup also failed after Gemini:", groqErr);
         return blankResult(
           "Gemini (your default) is unavailable, and Groq — its backup — has also hit its limit right now. Please try again in a moment.",
           droppedMessages
@@ -1486,11 +1493,13 @@ export async function getAssistantReply(params: {
         provider: "gemini",
         providerNote: `Groq's limit was reached${retrySuffix}, so this reply came from Gemini instead.`,
       };
-    } catch {
+    } catch (geminiErr) {
       // Both providers failing in the same turn is rare (Gemini itself
       // transiently overloaded right when Groq needed backup), but dumping
       // that raw error into the chat isn't useful — a plain, honest message
-      // beats a stack of JSON.
+      // beats a stack of JSON. Still worth logging why, same reasoning as
+      // the mirrored catch above.
+      console.error("Gemini backup also failed after Groq:", geminiErr);
       return blankResult(
         `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`,
         droppedMessages

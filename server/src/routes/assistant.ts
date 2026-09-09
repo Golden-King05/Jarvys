@@ -196,6 +196,7 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
 
     res.json(result);
   } catch (err) {
+    console.error("Assistant chat request failed:", err);
     res.status(502).json({ error: err instanceof Error ? err.message : "Assistant request failed" });
   }
 });
