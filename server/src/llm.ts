@@ -1133,6 +1133,74 @@ function blankResult(reply: string, droppedMessages: number): ChatResult {
 // the everyday default or as Gemini's backup when Gemini is the user's
 // chosen default and happens to be down. Throws GroqRateLimitError on a 429
 // so either caller can decide how to fail over.
+// Every tool Groq is offered on each turn, regardless of whether the
+// message needs one — hoisted to module scope (rather than rebuilt inside
+// runGroqPath every call) so GROQ_TOOLS_TOKEN_ESTIMATE below only has to
+// serialize it once.
+const GROQ_TOOLS = [
+  SEARCH_WIKIPEDIA_TOOL,
+  FIND_PLACES_TOOL,
+  CALCULATE_DISTANCE_TOOL,
+  HIGHLIGHT_REGIONS_TOOL,
+  VERIFY_MAP_TOOL,
+  GET_WEATHER_TOOL,
+  GET_LOCAL_TIME_TOOL,
+  CONVERT_CURRENCY_TOOL,
+  PROPOSE_MAP_POINT_TOOL,
+  FIND_SAVED_POINT_TOOL,
+  FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL,
+  GET_WIKIPEDIA_ARTICLE_TOOL,
+  LIST_SAVED_TAG_KEYS_TOOL,
+  FIND_POINTS_BY_TAG_TOOL,
+  GET_WEATHER_FORECAST_TOOL,
+  GET_WEATHER_ALERTS_TOOL,
+  GET_AIR_QUALITY_TOOL,
+  FIND_FLIGHTS_NEAR_TOOL,
+  SET_MAP_LAYER_TOOL,
+];
+
+// trimHistory's threshold is sized against the model's full context window
+// (131k tokens) — the right ceiling for deciding when a conversation is
+// getting *unmanageably* long, but Groq's free-tier plan enforces a much
+// tighter per-minute input-token cap (observed: 7000) that has nothing to
+// do with context window size. Worse, trimHistory's estimate only counts
+// the system prompt, history, and message — never the ~19 tool schemas
+// (~3,600 tokens) sent on every single request regardless of history
+// length. Combined with the system prompt itself (~1,800 tokens), fixed
+// per-request overhead alone eats most of that 7000 budget before any
+// history is added, so a conversation trimHistory considers nowhere near
+// full could still blow the real per-minute cap (confirmed in production:
+// a short message with modest history hit a 413 "too large" from Groq).
+// This is a second, tighter trim specifically for what's about to be sent
+// to Groq — Gemini's much larger budget is unaffected.
+const GROQ_TOOLS_TOKEN_ESTIMATE = estimateTokens(JSON.stringify(GROQ_TOOLS));
+const GROQ_SAFE_REQUEST_TOKENS = 6000;
+
+function trimHistoryForGroq(
+  history: ChatTurn[],
+  droppedMessages: number,
+  systemPrompt: string,
+  message: string
+): { history: ChatTurn[]; droppedMessages: number } {
+  let trimmed = history;
+  let dropped = droppedMessages;
+
+  function estimateTotal(h: ChatTurn[]): number {
+    return (
+      GROQ_TOOLS_TOKEN_ESTIMATE +
+      estimateTokens(systemPrompt) +
+      estimateTokens(message) +
+      h.reduce((sum, turn) => sum + estimateTokens(turn.content), 0)
+    );
+  }
+
+  while (trimmed.length > 0 && estimateTotal(trimmed) > GROQ_SAFE_REQUEST_TOKENS) {
+    trimmed = trimmed.slice(2);
+    dropped += 2;
+  }
+  return { history: trimmed, droppedMessages: dropped };
+}
+
 async function runGroqPath(params: {
   apiKey: string;
   userId: string;
@@ -1142,7 +1210,13 @@ async function runGroqPath(params: {
   droppedMessages: number;
   offerThinkingTool: boolean;
 }): Promise<ChatResult> {
-  const { apiKey, userId, systemPrompt, message, history, droppedMessages, offerThinkingTool } = params;
+  const { apiKey, userId, systemPrompt, message, offerThinkingTool } = params;
+  const { history, droppedMessages } = trimHistoryForGroq(
+    params.history,
+    params.droppedMessages,
+    systemPrompt,
+    message
+  );
 
   // Ask a narrow yes/no question up front rather than hoping the model
   // interrupts its own answer to flag difficulty (see checkDifficulty).
@@ -1185,28 +1259,6 @@ async function runGroqPath(params: {
     { role: "user", content: message },
   ];
 
-  const tools = [
-    SEARCH_WIKIPEDIA_TOOL,
-    FIND_PLACES_TOOL,
-    CALCULATE_DISTANCE_TOOL,
-    HIGHLIGHT_REGIONS_TOOL,
-    VERIFY_MAP_TOOL,
-    GET_WEATHER_TOOL,
-    GET_LOCAL_TIME_TOOL,
-    CONVERT_CURRENCY_TOOL,
-    PROPOSE_MAP_POINT_TOOL,
-    FIND_SAVED_POINT_TOOL,
-    FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL,
-    GET_WIKIPEDIA_ARTICLE_TOOL,
-    LIST_SAVED_TAG_KEYS_TOOL,
-    FIND_POINTS_BY_TAG_TOOL,
-    GET_WEATHER_FORECAST_TOOL,
-    GET_WEATHER_ALERTS_TOOL,
-    GET_AIR_QUALITY_TOOL,
-    FIND_FLIGHTS_NEAR_TOOL,
-    SET_MAP_LAYER_TOOL,
-  ];
-
   const forceForecastTool = looksLikeForecastRequest(message);
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -1219,7 +1271,7 @@ async function runGroqPath(params: {
       body: JSON.stringify({
         model: GROQ_MODEL,
         messages,
-        tools,
+        tools: GROQ_TOOLS,
         tool_choice:
           iteration === 0 && forceForecastTool
             ? { type: "function", function: { name: "get_weather_forecast" } }
@@ -1238,7 +1290,13 @@ async function runGroqPath(params: {
       }),
     });
 
-    if (res.status === 429) {
+    // 413 is Groq's status for "this request's tokens exceed the per-minute
+    // cap" (its own error body even carries code: "rate_limit_exceeded") —
+    // a capacity problem exactly like 429, just reported differently since
+    // it's triggered by one oversized request rather than call frequency.
+    // Treating it as a plain error here meant it skipped the Gemini
+    // fallback entirely and leaked Groq's raw error text to the user.
+    if (res.status === 429 || res.status === 413) {
       throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"), readRetryAfter(res));
     }
     if (!res.ok) {
