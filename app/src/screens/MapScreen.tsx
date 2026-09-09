@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   ScrollView,
@@ -206,6 +206,16 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     }
   }
 
+  // MapCanvas only knows about MapPoint mirrors (from toMapPoint), not the
+  // real saved Point objects — resolve back to the real Point by id so
+  // isSavedPoint (and therefore Edit/Delete) actually works. Without this,
+  // selectedPoint was always the mirror, which lacks the `createdAt` field
+  // isSavedPoint checks for, so editing was never reachable from a tap.
+  function handlePointPress(point: MapPoint) {
+    const saved = point.id ? points.find((p) => p.id === point.id) : undefined;
+    setSelectedPoint(saved ?? point);
+  }
+
   async function handleDeleteSelected() {
     if (!selectedPoint || !isSavedPoint(selectedPoint) || !token) return;
     try {
@@ -243,8 +253,15 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     }
   }
 
-  const savedMarkers = points.map(toMapPoint);
-  const markers = mapData?.kind === "distance" ? [...savedMarkers, ...mapData.points] : savedMarkers;
+  // Memoized so MapCanvas only sees a new `points` array reference when the
+  // underlying data actually changes — otherwise every render (e.g. just
+  // opening the detail popup, which only touches selectedPoint) would
+  // rebuild this array, and MapCanvas's "fit to all points" effect would
+  // re-fire and re-zoom out to fit everything, every time.
+  const markers = useMemo(() => {
+    const savedMarkers = points.map(toMapPoint);
+    return mapData?.kind === "distance" ? [...savedMarkers, ...mapData.points] : savedMarkers;
+  }, [points, mapData]);
   const regions = mapData?.kind === "regions" ? mapData.regions : undefined;
   const hasStatusLegend = regions?.some((r) => r.status) ?? false;
 
@@ -257,7 +274,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
           regions={regions}
           initialRegion={initialRegion}
           onMapPress={handleMapPress}
-          onPointPress={setSelectedPoint}
+          onPointPress={handlePointPress}
           onRegionPress={setSelectedRegion}
           onPointDragEnd={handlePointDragEnd}
           pendingMarker={addStep === "details" ? pendingLocation : null}
