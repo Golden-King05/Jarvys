@@ -163,6 +163,7 @@ export interface ImportPointFromUrl {
   url: string;
   lat?: number;
   lon?: number;
+  name?: string;
   category?: string;
   subcategory?: string;
   icon?: string;

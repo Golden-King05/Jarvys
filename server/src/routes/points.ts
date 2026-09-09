@@ -94,16 +94,18 @@ const importSchema = z.object({
   url: z.string().url(),
   lat: z.number().min(-90).max(90).optional(),
   lon: z.number().min(-180).max(180).optional(),
+  name: z.string().min(1).max(120).optional(),
   category: z.string().max(60).optional(),
   subcategory: z.string().max(60).optional(),
   icon: z.string().max(8).optional(),
   tags: z.array(tagSchema).max(20).optional(),
 });
 
-// No name required here — it's inferred from the URL (the Wikipedia article
-// title, or the page's <title> tag). Wikipedia articles about a real place
-// carry their own coordinates; anything else needs lat/lon supplied, which
-// the client gets by having the user tap the map first.
+// Name isn't required here — it's inferred from the URL (the Wikipedia
+// article title, or the page's <title> tag) — but the client can send its
+// own to let the user rename before saving. Wikipedia articles about a real
+// place carry their own coordinates; anything else needs lat/lon supplied,
+// which the client gets by having the user tap the map first.
 pointsRouter.post(
   "/from-url",
   asyncHandler(async (req: AuthedRequest, res) => {
@@ -123,12 +125,12 @@ pointsRouter.post(
       return res.status(422).json({
         error: "That link doesn't carry its own location — tap the map or enter coordinates to place it.",
         needsLocation: true,
-        name: imported.name,
+        name: parsed.data.name ?? imported.name,
       });
     }
 
     const point = await createMapPoint(req.userId!, {
-      name: imported.name,
+      name: parsed.data.name ?? imported.name,
       category: parsed.data.category ?? "",
       subcategory: parsed.data.subcategory ?? "",
       icon: parsed.data.icon ?? imported.icon,

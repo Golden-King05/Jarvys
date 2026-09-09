@@ -90,6 +90,7 @@ export default function MapScreen({
   const [pendingLocation, setPendingLocation] = useState<{ lat: number; lon: number } | null>(null);
   const [pendingUrlFinish, setPendingUrlFinish] = useState<{
     url: string;
+    name?: string;
     category?: string;
     subcategory?: string;
     icon?: string;
@@ -98,11 +99,12 @@ export default function MapScreen({
   const [manualCoords, setManualCoords] = useState({ lat: "", lon: "" });
   const [urlDraft, setUrlDraft] = useState<{
     url: string;
+    name: string;
     category: string;
     subcategory: string;
     icon: string;
     tags: PointTag[];
-  }>({ url: "", category: "", subcategory: "", icon: "", tags: [] });
+  }>({ url: "", name: "", category: "", subcategory: "", icon: "", tags: [] });
   const [detailsDraft, setDetailsDraft] = useState<{
     name: string;
     category: string;
@@ -205,7 +207,7 @@ export default function MapScreen({
     setPendingLocation(null);
     setPendingUrlFinish(null);
     setManualCoords({ lat: "", lon: "" });
-    setUrlDraft({ url: "", category: "", subcategory: "", icon: "", tags: [] });
+    setUrlDraft({ url: "", name: "", category: "", subcategory: "", icon: "", tags: [] });
     setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", tags: [] });
     urlIconLocked.current = false;
     detailsIconLocked.current = false;
@@ -213,13 +215,14 @@ export default function MapScreen({
   }
 
   // Shortcut from the Wikipedia layer's "Add to my map" button — the URL
-  // already carries the article's own name, blurb, and coordinates (via
+  // already carries the article's own blurb and coordinates (via
   // /points/from-url), so this just pre-fills the same URL-import form used
-  // elsewhere, letting the user pick a category, subcategory, emoji, and
-  // tags before saving.
-  function handleAddWikipediaArticle(url: string) {
+  // elsewhere — including the name, since otherwise it wouldn't be visible
+  // or editable until after saving — letting the user rename it and pick a
+  // category, subcategory, emoji, and tags before saving.
+  function handleAddWikipediaArticle(url: string, title: string) {
     urlIconLocked.current = false;
-    setUrlDraft({ url, category: "", subcategory: "", icon: "", tags: [] });
+    setUrlDraft({ url, name: title, category: "", subcategory: "", icon: "", tags: [] });
     setAddStep("url");
   }
 
@@ -309,6 +312,7 @@ export default function MapScreen({
     try {
       const payload = {
         url: urlDraft.url.trim(),
+        name: urlDraft.name.trim() || undefined,
         category: urlDraft.category.trim() || undefined,
         subcategory: urlDraft.subcategory.trim() || undefined,
         icon: urlDraft.icon.trim() || undefined,
@@ -586,6 +590,12 @@ export default function MapScreen({
               autoCapitalize="none"
               value={urlDraft.url}
               onChangeText={(v) => setUrlDraft((d) => ({ ...d, url: v }))}
+            />
+            <TextInput
+              style={styles.input}
+              placeholder="Name (optional) — auto-detected from the page"
+              value={urlDraft.name}
+              onChangeText={(v) => setUrlDraft((d) => ({ ...d, name: v }))}
             />
             <TextInput
               style={styles.input}

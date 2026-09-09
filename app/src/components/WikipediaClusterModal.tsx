@@ -6,7 +6,7 @@ import { fonts } from "../theme";
 interface WikipediaClusterModalProps {
   cluster: WikipediaCluster | null;
   onClose: () => void;
-  onAddToMap: (url: string) => void;
+  onAddToMap: (url: string, title: string) => void;
 }
 
 // Browses the articles at one map pin — most spots have just one, but a
@@ -68,7 +68,7 @@ export default function WikipediaClusterModal({ cluster, onClose, onAddToMap }: 
             <TouchableOpacity
               style={styles.primaryButton}
               onPress={() => {
-                onAddToMap(article.url);
+                onAddToMap(article.url, article.title);
                 close();
               }}
             >
