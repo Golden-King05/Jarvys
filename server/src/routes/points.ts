@@ -97,6 +97,7 @@ const importSchema = z.object({
   category: z.string().max(60).optional(),
   subcategory: z.string().max(60).optional(),
   icon: z.string().max(8).optional(),
+  tags: z.array(tagSchema).max(20).optional(),
 });
 
 // No name required here — it's inferred from the URL (the Wikipedia article
@@ -136,6 +137,7 @@ pointsRouter.post(
       urls: imported.urls,
       blurb: imported.blurb,
       source: "import",
+      tags: parsed.data.tags ?? [],
     });
     res.json(toApiPoint(point));
   })

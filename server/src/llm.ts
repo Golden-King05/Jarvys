@@ -100,7 +100,7 @@ export interface MapData {
 // so the assistant can't set it directly; this just tells the client what
 // the user asked for.
 export interface LayerCommand {
-  layer: "radar" | "timezones" | "pins" | "flights";
+  layer: "radar" | "timezones" | "pins" | "flights" | "wikipedia";
   enabled: boolean;
 }
 
@@ -338,13 +338,13 @@ const SET_MAP_LAYER_TOOL = {
   function: {
     name: "set_map_layer",
     description:
-      "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), or 'flights' (live nearby aircraft). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+      "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), 'flights' (live nearby aircraft), or 'wikipedia' (nearby Wikipedia articles). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
     parameters: {
       type: "object",
       properties: {
         layer: {
           type: "string",
-          enum: ["radar", "timezones", "pins", "flights"],
+          enum: ["radar", "timezones", "pins", "flights", "wikipedia"],
           description: "Which layer to change.",
         },
         enabled: { type: "boolean", description: "true to turn it on, false to turn it off." },
@@ -897,8 +897,11 @@ async function executeTool(
 
   if (name === "set_map_layer") {
     const layer = args.layer;
-    if (layer !== "radar" && layer !== "timezones" && layer !== "pins") {
-      return { result: { error: "layer must be 'radar', 'timezones', or 'pins'" }, mapData: null };
+    if (layer !== "radar" && layer !== "timezones" && layer !== "pins" && layer !== "flights" && layer !== "wikipedia") {
+      return {
+        result: { error: "layer must be 'radar', 'timezones', 'pins', 'flights', or 'wikipedia'" },
+        mapData: null,
+      };
     }
     if (typeof args.enabled !== "boolean") {
       return { result: { error: "Missing required 'enabled' boolean argument" }, mapData: null };
@@ -1072,7 +1075,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "You have no built-in way to know real current or future weather — never guess, estimate, or state specific temperatures, conditions, or precipitation chances from your own knowledge, even for a well-known climate (e.g. 'it's probably mild there this time of year'). Always call a tool: get_weather for current conditions, or get_weather_forecast for tomorrow, this week, or any future day — call the forecast tool once even for a multi-day range like 'this weekend' rather than repeatedly. Both also drop a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     "For US locations, get_weather_alerts checks active severe weather warnings/watches/advisories, and get_air_quality (worldwide) checks current AQI and pollutant levels — use these for storm-warning or air-quality/pollution questions rather than folding that into get_weather.",
     "find_flights_near shows live aircraft currently flying near a location, via OpenSky — use it when the user asks what's flying overhead or near somewhere; it's a live snapshot, not saved to their map.",
-    "You can turn a map layer on or off for the user with set_map_layer — 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), or 'flights' (a live-updating layer of nearby aircraft) — whenever they ask to show, hide, turn on/off, or toggle one of these. Never say a layer is now on or off unless you actually called set_map_layer this turn — claiming it without calling the tool leaves the map unchanged and misleads them.",
+    "You can turn a map layer on or off for the user with set_map_layer — 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), 'flights' (a live-updating layer of nearby aircraft), or 'wikipedia' (nearby geotagged Wikipedia articles, browsable right on the map) — whenever they ask to show, hide, turn on/off, or toggle one of these. Never say a layer is now on or off unless you actually called set_map_layer this turn — claiming it without calling the tool leaves the map unchanged and misleads them.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
     "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
     "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",

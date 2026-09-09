@@ -5,6 +5,7 @@ import { authRouter } from "./routes/auth.js";
 import { assistantRouter } from "./routes/assistant.js";
 import { flightsRouter } from "./routes/flights.js";
 import { pointsRouter } from "./routes/points.js";
+import { wikipediaRouter } from "./routes/wikipedia.js";
 
 const app = express();
 app.use(cors());
@@ -16,6 +17,7 @@ app.use("/auth", authRouter);
 app.use("/assistant", assistantRouter);
 app.use("/points", pointsRouter);
 app.use("/flights", flightsRouter);
+app.use("/wikipedia", wikipediaRouter);
 
 // Last-resort net: any route error that reaches here (typically forwarded by
 // asyncHandler) gets a clean response instead of an unhandled exception.

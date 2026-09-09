@@ -285,13 +285,13 @@ const SEARCH_WIKIPEDIA_TOOL = {
     {
       name: "set_map_layer",
       description:
-        "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), or 'flights' (live nearby aircraft). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+        "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), 'flights' (live nearby aircraft), or 'wikipedia' (nearby Wikipedia articles). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
       parameters: {
         type: "object",
         properties: {
           layer: {
             type: "string",
-            enum: ["radar", "timezones", "pins", "flights"],
+            enum: ["radar", "timezones", "pins", "flights", "wikipedia"],
             description: "Which layer to change.",
           },
           enabled: { type: "boolean", description: "true to turn it on, false to turn it off." },
@@ -729,8 +729,11 @@ async function executeTool(
 
   if (call.name === "set_map_layer") {
     const layer = args.layer;
-    if (layer !== "radar" && layer !== "timezones" && layer !== "pins") {
-      return { result: { error: "layer must be 'radar', 'timezones', or 'pins'" }, mapData: null };
+    if (layer !== "radar" && layer !== "timezones" && layer !== "pins" && layer !== "flights" && layer !== "wikipedia") {
+      return {
+        result: { error: "layer must be 'radar', 'timezones', 'pins', 'flights', or 'wikipedia'" },
+        mapData: null,
+      };
     }
     if (typeof args.enabled !== "boolean") {
       return { result: { error: "Missing required 'enabled' boolean argument" }, mapData: null };

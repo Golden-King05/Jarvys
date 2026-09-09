@@ -1,16 +1,21 @@
 import React, { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
-import { api, type MapPoint, type RegionMapData } from "../api";
+import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from "../api";
 import { useAuth } from "../AuthContext";
 import { outerRings } from "../utils/geojson";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
+import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
 
 // Anonymous OpenSky access is rate-limited — this keeps polling infrequent
 // enough to stay well within it while still feeling roughly "live".
 const FLIGHTS_POLL_MS = 20000;
+// Wikipedia articles don't move like aircraft do — this just re-checks
+// whether the viewport has wandered outside the last-fetched area, so it
+// can be much less frequent than the flights poll above.
+const WIKI_POLL_MS = 8000;
 
 interface MapCanvasProps {
   points: MapPoint[];
@@ -30,6 +35,11 @@ interface MapCanvasProps {
   // Shows a live-updating layer of nearby aircraft (via the server's
   // /flights proxy to OpenSky), polled on an interval while on.
   showFlights?: boolean;
+  // Shows nearby geotagged Wikipedia articles as browsable pins, clustered
+  // by proximity — refetched as the viewport moves outside its last-loaded
+  // area.
+  showWikipedia?: boolean;
+  onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -84,6 +94,8 @@ export default function MapCanvas({
   showTimezoneBands,
   showPins = true,
   showFlights,
+  showWikipedia,
+  onWikipediaClusterPress,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
@@ -92,6 +104,8 @@ export default function MapCanvas({
   const hasFitInitially = useRef(false);
   const [radarTemplate, setRadarTemplate] = useState<string | null>(null);
   const [flightPoints, setFlightPoints] = useState<MapPoint[]>([]);
+  const [wikiClusters, setWikiClusters] = useState<WikipediaCluster[]>([]);
+  const lastWikiFetchBox = useRef<LatLonBox | null>(null);
   const [currentZoom, setCurrentZoom] = useState(() =>
     zoomFromLongitudeDelta(initialRegion ? 0.1 : DEFAULT_REGION.longitudeDelta)
   );
@@ -139,6 +153,44 @@ export default function MapCanvas({
       clearInterval(interval);
     };
   }, [showFlights, baseUrl, token]);
+
+  useEffect(() => {
+    if (!showWikipedia || !token) {
+      setWikiClusters([]);
+      lastWikiFetchBox.current = null;
+      return;
+    }
+    let cancelled = false;
+    async function poll() {
+      const bounds = await mapRef.current?.getMapBoundaries();
+      if (!bounds || cancelled || !token) return;
+      const viewport: LatLonBox = {
+        south: bounds.southWest.latitude,
+        west: bounds.southWest.longitude,
+        north: bounds.northEast.latitude,
+        east: bounds.northEast.longitude,
+      };
+      // The article set doesn't change on its own — skip the round trip
+      // if the last fetch already covers where we're looking now.
+      if (lastWikiFetchBox.current && boxContains(lastWikiFetchBox.current, viewport)) return;
+      const fetchBox = padBox(viewport, 0.5);
+      try {
+        const { clusters } = await api.getNearbyWikipedia(baseUrl, token, fetchBox);
+        if (!cancelled) {
+          setWikiClusters(clusters);
+          lastWikiFetchBox.current = fetchBox;
+        }
+      } catch {
+        // A failed poll just leaves the last-known clusters on screen.
+      }
+    }
+    poll();
+    const interval = setInterval(poll, WIKI_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [showWikipedia, baseUrl, token]);
 
   function fitToContent() {
     if (!mapRef.current) return;
@@ -277,6 +329,26 @@ export default function MapCanvas({
           ))
         : null}
 
+      {showWikipedia
+        ? wikiClusters.map((c, i) => (
+            <Marker
+              key={`wiki-${i}`}
+              coordinate={{ latitude: c.lat, longitude: c.lon }}
+              onPress={() => onWikipediaClusterPress?.(c)}
+              tracksViewChanges={false}
+            >
+              <View style={styles.markerBubble}>
+                <Text style={styles.markerEmoji}>📖</Text>
+                {c.articles.length > 1 ? (
+                  <View style={styles.markerBadge}>
+                    <Text style={styles.markerBadgeText}>{c.articles.length}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </Marker>
+          ))
+        : null}
+
       {pendingMarker ? (
         <Marker coordinate={{ latitude: pendingMarker.lat, longitude: pendingMarker.lon }} pinColor="#e67e22" />
       ) : null}
@@ -301,6 +373,19 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
   },
   markerEmoji: { fontSize: 18 },
+  markerBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    backgroundColor: "#2980b9",
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  markerBadgeText: { color: "#fff", fontSize: 10, fontWeight: "600" },
   tzLabel: {
     fontSize: 11,
     color: "#555",

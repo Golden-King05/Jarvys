@@ -1,13 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, type MapPoint, type RegionMapData } from "../api";
+import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from "../api";
 import { useAuth } from "../AuthContext";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
+import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
 
 // Anonymous OpenSky access is rate-limited — this keeps polling infrequent
 // enough to stay well within it while still feeling roughly "live".
 const FLIGHTS_POLL_MS = 20000;
+// Wikipedia articles don't move like aircraft do — this just re-checks
+// whether the viewport has wandered outside the last-fetched area, so it
+// can be much less frequent than the flights poll above.
+const WIKI_POLL_MS = 8000;
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -60,6 +65,11 @@ interface MapCanvasProps {
   // Shows a live-updating layer of nearby aircraft (via the server's
   // /flights proxy to OpenSky), polled on an interval while on.
   showFlights?: boolean;
+  // Shows nearby geotagged Wikipedia articles as browsable pins, clustered
+  // by proximity — refetched as the viewport moves outside its last-loaded
+  // area.
+  showWikipedia?: boolean;
+  onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -86,6 +96,18 @@ function emojiIcon(L: Leaflet, icon: string) {
   });
 }
 
+function emojiIconWithBadge(L: Leaflet, icon: string, count: number) {
+  const badge =
+    count > 1
+      ? `<div style="position:absolute;top:-4px;right:-4px;background:#2980b9;color:#fff;border-radius:8px;min-width:16px;height:16px;padding:0 3px;font-size:10px;font-weight:600;line-height:16px;text-align:center">${count}</div>`
+      : "";
+  return L.divIcon({
+    html: `<div style="position:relative;font-size:22px;line-height:1;transform:translate(-50%,-50%)">${icon}${badge}</div>`,
+    className: "",
+    iconSize: [0, 0],
+  });
+}
+
 export default function MapCanvas({
   points,
   showLine,
@@ -100,6 +122,8 @@ export default function MapCanvas({
   showTimezoneBands,
   showPins = true,
   showFlights,
+  showWikipedia,
+  onWikipediaClusterPress,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
@@ -110,11 +134,15 @@ export default function MapCanvas({
   const radarLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
   const flightsLayerRef = useRef<Leaflet>(null);
+  const wikiLayerRef = useRef<Leaflet>(null);
+  const lastWikiFetchBox = useRef<LatLonBox | null>(null);
   const hasFitInitially = useRef(false);
   const onMapPressRef = useRef(onMapPress);
   onMapPressRef.current = onMapPress;
   const onPointPressRef = useRef(onPointPress);
   onPointPressRef.current = onPointPress;
+  const onWikipediaClusterPressRef = useRef(onWikipediaClusterPress);
+  onWikipediaClusterPressRef.current = onWikipediaClusterPress;
   const [currentZoom, setCurrentZoom] = useState(initialRegion ? 12 : 4);
   const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
 
@@ -380,6 +408,61 @@ export default function MapCanvas({
       clearInterval(interval);
     };
   }, [showFlights, baseUrl, token]);
+
+  // Own persistent layer, same reasoning as radar/timezones above — polling
+  // redraws just this layer without touching points/regions.
+  useEffect(() => {
+    if (!showWikipedia || !token) {
+      loadLeaflet().then((L) => {
+        const map = mapInstance.current;
+        if (map && wikiLayerRef.current) {
+          map.removeLayer(wikiLayerRef.current);
+          wikiLayerRef.current = null;
+        }
+      });
+      lastWikiFetchBox.current = null;
+      return;
+    }
+    let cancelled = false;
+    async function poll() {
+      const L = await loadLeaflet();
+      const map = mapInstance.current;
+      if (cancelled || !map || !token) return;
+      const bounds = map.getBounds();
+      const viewport: LatLonBox = {
+        south: bounds.getSouth(),
+        west: bounds.getWest(),
+        north: bounds.getNorth(),
+        east: bounds.getEast(),
+      };
+      // The article set doesn't change on its own — skip the round trip if
+      // the last fetch already covers where we're looking now.
+      if (lastWikiFetchBox.current && boxContains(lastWikiFetchBox.current, viewport)) return;
+      const fetchBox = padBox(viewport, 0.5);
+      let clusters: WikipediaCluster[];
+      try {
+        const response = await api.getNearbyWikipedia(baseUrl, token, fetchBox);
+        clusters = response.clusters;
+      } catch {
+        return; // A failed poll just leaves the last-known clusters on screen.
+      }
+      if (cancelled) return;
+      lastWikiFetchBox.current = fetchBox;
+      if (!wikiLayerRef.current) wikiLayerRef.current = L.layerGroup().addTo(map);
+      wikiLayerRef.current.clearLayers();
+      clusters.forEach((c) => {
+        L.marker([c.lat, c.lon], { icon: emojiIconWithBadge(L, "📖", c.articles.length) })
+          .addTo(wikiLayerRef.current)
+          .on("click", () => onWikipediaClusterPressRef.current?.(c));
+      });
+    }
+    poll();
+    const interval = setInterval(poll, WIKI_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [showWikipedia, baseUrl, token]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }

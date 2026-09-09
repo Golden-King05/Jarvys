@@ -73,7 +73,7 @@ export interface MapData {
 // A request to turn a map layer on or off — the assistant can ask for this,
 // but the layer state itself lives entirely on the client.
 export interface LayerCommand {
-  layer: "radar" | "timezones" | "pins" | "flights";
+  layer: "radar" | "timezones" | "pins" | "flights" | "wikipedia";
   enabled: boolean;
 }
 
@@ -82,6 +82,22 @@ export interface MapBoundingBox {
   west: number;
   north: number;
   east: number;
+}
+
+export interface WikipediaArticle {
+  pageid: number;
+  title: string;
+  extract: string;
+  url: string;
+}
+
+// Several geotagged articles sitting close enough together to render as one
+// pin — the client cycles through `articles` on tap rather than stacking a
+// marker per article.
+export interface WikipediaCluster {
+  lat: number;
+  lon: number;
+  articles: WikipediaArticle[];
 }
 
 export interface ChatResponse {
@@ -150,6 +166,7 @@ export interface ImportPointFromUrl {
   category?: string;
   subcategory?: string;
   icon?: string;
+  tags?: PointTag[];
 }
 
 export type ImportPointResult = { needsLocation: true; name: string } | { needsLocation: false; point: Point };
@@ -257,6 +274,15 @@ export const api = {
     request<{ points: MapPoint[] }>(
       baseUrl,
       `/flights?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}`,
+      { token }
+    ),
+
+  // Nearby geotagged Wikipedia articles, pre-clustered by proximity — backs
+  // the "Wikipedia" layer.
+  getNearbyWikipedia: (baseUrl: string, token: string, box: MapBoundingBox, limit = 60) =>
+    request<{ clusters: WikipediaCluster[]; areaTooLarge: boolean }>(
+      baseUrl,
+      `/wikipedia/nearby?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}&limit=${limit}`,
       { token }
     ),
 

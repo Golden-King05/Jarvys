@@ -15,7 +15,17 @@ import PointDetailModal from "../components/PointDetailModal";
 import RegionDetailModal from "../components/RegionDetailModal";
 import RegionLegend from "../components/RegionLegend";
 import TagsEditor from "../components/TagsEditor";
-import { api, isSavedPoint, type MapData, type MapPoint, type Point, type PointTag, type RegionMapData } from "../api";
+import WikipediaClusterModal from "../components/WikipediaClusterModal";
+import {
+  api,
+  isSavedPoint,
+  type MapData,
+  type MapPoint,
+  type Point,
+  type PointTag,
+  type RegionMapData,
+  type WikipediaCluster,
+} from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { suggestIcon } from "../utils/suggestIcon";
@@ -34,6 +44,8 @@ interface MapScreenProps {
   setShowPins: (v: boolean) => void;
   showFlights: boolean;
   setShowFlights: (v: boolean) => void;
+  showWikipedia: boolean;
+  setShowWikipedia: (v: boolean) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awaiting-tap";
@@ -64,12 +76,15 @@ export default function MapScreen({
   setShowPins,
   showFlights,
   setShowFlights,
+  showWikipedia,
+  setShowWikipedia,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
   const [points, setPoints] = useState<Point[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<Point | MapPoint | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
+  const [selectedWikiCluster, setSelectedWikiCluster] = useState<WikipediaCluster | null>(null);
 
   const [addStep, setAddStep] = useState<AddStep>("closed");
   const [pendingLocation, setPendingLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -78,9 +93,16 @@ export default function MapScreen({
     category?: string;
     subcategory?: string;
     icon?: string;
+    tags?: PointTag[];
   } | null>(null);
   const [manualCoords, setManualCoords] = useState({ lat: "", lon: "" });
-  const [urlDraft, setUrlDraft] = useState({ url: "", category: "", subcategory: "", icon: "" });
+  const [urlDraft, setUrlDraft] = useState<{
+    url: string;
+    category: string;
+    subcategory: string;
+    icon: string;
+    tags: PointTag[];
+  }>({ url: "", category: "", subcategory: "", icon: "", tags: [] });
   const [detailsDraft, setDetailsDraft] = useState<{
     name: string;
     category: string;
@@ -183,11 +205,22 @@ export default function MapScreen({
     setPendingLocation(null);
     setPendingUrlFinish(null);
     setManualCoords({ lat: "", lon: "" });
-    setUrlDraft({ url: "", category: "", subcategory: "", icon: "" });
+    setUrlDraft({ url: "", category: "", subcategory: "", icon: "", tags: [] });
     setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", tags: [] });
     urlIconLocked.current = false;
     detailsIconLocked.current = false;
     setAddError(null);
+  }
+
+  // Shortcut from the Wikipedia layer's "Add to my map" button — the URL
+  // already carries the article's own name, blurb, and coordinates (via
+  // /points/from-url), so this just pre-fills the same URL-import form used
+  // elsewhere, letting the user pick a category, subcategory, emoji, and
+  // tags before saving.
+  function handleAddWikipediaArticle(url: string) {
+    urlIconLocked.current = false;
+    setUrlDraft({ url, category: "", subcategory: "", icon: "", tags: [] });
+    setAddStep("url");
   }
 
   async function finishUrlImport(lat: number, lon: number) {
@@ -279,6 +312,7 @@ export default function MapScreen({
         category: urlDraft.category.trim() || undefined,
         subcategory: urlDraft.subcategory.trim() || undefined,
         icon: urlDraft.icon.trim() || undefined,
+        tags: urlDraft.tags.map((t) => ({ key: t.key.trim(), value: t.value.trim() })).filter((t) => t.key && t.value),
       };
       const result = await api.createPointFromUrl(baseUrl, token, payload);
       if (result.needsLocation) {
@@ -374,6 +408,8 @@ export default function MapScreen({
           showTimezoneBands={showTimezoneBands}
           showPins={showPins}
           showFlights={showFlights}
+          showWikipedia={showWikipedia}
+          onWikipediaClusterPress={setSelectedWikiCluster}
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
         />
@@ -466,9 +502,23 @@ export default function MapScreen({
               </View>
               <Switch value={showFlights} onValueChange={setShowFlights} />
             </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Wikipedia</Text>
+                <Text style={styles.layerHint}>Browse nearby articles right on the map</Text>
+              </View>
+              <Switch value={showWikipedia} onValueChange={setShowWikipedia} />
+            </View>
           </View>
         </View>
       </Modal>
+
+      <WikipediaClusterModal
+        cluster={selectedWikiCluster}
+        onClose={() => setSelectedWikiCluster(null)}
+        onAddToMap={handleAddWikipediaArticle}
+      />
 
       <Modal
         visible={addStep === "choose"}
@@ -528,7 +578,7 @@ export default function MapScreen({
 
       <Modal visible={addStep === "url"} transparent animationType="fade" onRequestClose={closeAddFlow}>
         <View style={styles.overlay}>
-          <View style={styles.card}>
+          <ScrollView style={styles.card} contentContainerStyle={{ paddingBottom: 4 }}>
             <Text style={styles.cardTitle}>Import from a URL</Text>
             <TextInput
               style={styles.input}
@@ -558,6 +608,11 @@ export default function MapScreen({
                 setUrlDraft((d) => ({ ...d, icon: v }));
               }}
             />
+            <TagsEditor
+              tags={urlDraft.tags}
+              onChange={(tags) => setUrlDraft((d) => ({ ...d, tags }))}
+              suggestedKeys={tagKeys}
+            />
             {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
             <View style={styles.formButtons}>
               <TouchableOpacity onPress={closeAddFlow}>
@@ -567,7 +622,7 @@ export default function MapScreen({
                 <Text style={styles.submitButtonText}>{submitting ? "Importing…" : "Import"}</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 

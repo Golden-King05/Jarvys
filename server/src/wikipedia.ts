@@ -130,7 +130,19 @@ async function findArticlesNear(lat: number, lon: number, limit: number): Promis
     exchars: "300",
     format: "json",
   });
-  const res = await fetch(`${WIKI_SEARCH_URL}?${params}`, { headers: { "User-Agent": USER_AGENT } });
+  let res: Response;
+  try {
+    // findArticlesInArea fires several of these in parallel per call, and
+    // now that it also backs a live map layer (polled repeatedly while
+    // browsing, not just an occasional AI tool call) a hung connection here
+    // would otherwise stall every tile's Promise.all indefinitely.
+    res = await fetch(`${WIKI_SEARCH_URL}?${params}`, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: AbortSignal.timeout(6000),
+    });
+  } catch {
+    return [];
+  }
   if (!res.ok) return [];
   const data = (await res.json()) as GeoSearchResponse;
   const pages = data.query?.pages ? Object.values(data.query.pages) : [];
@@ -201,4 +213,33 @@ export async function findArticlesInArea(
   }
 
   return { articles: [...merged.values()].slice(0, maxResults), areaTooLarge: idealTiles > MAX_GRID_TILES };
+}
+
+export interface ArticleCluster {
+  lat: number;
+  lon: number;
+  articles: { pageid: number; title: string; extract: string; url: string }[];
+}
+
+// Multiple articles often sit on essentially the same spot (a building and
+// the organization inside it, a park and its monument) — grouping anything
+// within this radius into one pin lets the map show one marker there
+// instead of several stacked unreadably on top of each other, with the
+// client cycling through the group's members on tap.
+const CLUSTER_RADIUS_METERS = 150;
+
+export function clusterArticles(articles: NearbyArticle[]): ArticleCluster[] {
+  const clusters: ArticleCluster[] = [];
+  for (const article of articles) {
+    const nearby = clusters.find(
+      (c) => haversineKm(c.lat, c.lon, article.lat, article.lon) * 1000 <= CLUSTER_RADIUS_METERS
+    );
+    const entry = { pageid: article.pageid, title: article.title, extract: article.extract, url: article.url };
+    if (nearby) {
+      nearby.articles.push(entry);
+    } else {
+      clusters.push({ lat: article.lat, lon: article.lon, articles: [entry] });
+    }
+  }
+  return clusters;
 }
