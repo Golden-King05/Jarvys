@@ -763,20 +763,39 @@ export async function getAssistantReply(params: {
     // Groq is out of capacity for now (daily or per-minute) — Gemini picks
     // up this turn instead of failing the message outright. It gets the
     // same trimmed history, so the conversation continues without a gap.
-    const result = await getGeminiReply({
-      systemPrompt,
-      message: params.message,
-      history,
-      droppedMessages,
-      thinking: false,
-    });
     const retrySuffix =
       err.retryAfterSeconds != null ? ` (back in about ${Math.ceil(err.retryAfterSeconds)}s)` : "";
-    return {
-      ...result,
-      provider: "gemini",
-      providerNote: `Groq's limit was reached${retrySuffix}, so this reply came from Gemini instead.`,
-    };
+    try {
+      const result = await getGeminiReply({
+        systemPrompt,
+        message: params.message,
+        history,
+        droppedMessages,
+        thinking: false,
+      });
+      return {
+        ...result,
+        provider: "gemini",
+        providerNote: `Groq's limit was reached${retrySuffix}, so this reply came from Gemini instead.`,
+      };
+    } catch {
+      // Both providers failing in the same turn is rare (Gemini itself
+      // transiently overloaded right when Groq needed backup), but dumping
+      // that raw error into the chat isn't useful — a plain, honest message
+      // beats a stack of JSON.
+      return {
+        reply: `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`,
+        usage: null,
+        compressed: droppedMessages > 0,
+        droppedMessages,
+        rateLimit: null,
+        thinkingRequest: null,
+        provider: null,
+        providerNote: null,
+        mapData: null,
+        toolsUsed: [],
+      };
+    }
   }
 }
 
