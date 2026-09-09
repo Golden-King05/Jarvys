@@ -1,5 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Button, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Button,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import {
   AudioModule,
   RecordingPresets,
@@ -11,6 +21,7 @@ import { api, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
+import RingChart from "../components/RingChart";
 
 interface Message {
   from: "you" | "assistant" | "system";
@@ -52,6 +63,9 @@ export default function HomeScreen() {
   const [pendingThinking, setPendingThinking] = useState<PendingThinking | null>(null);
   const [resolvingThinking, setResolvingThinking] = useState(false);
   const [lastProvider, setLastProvider] = useState<Provider | null>(null);
+  const [showStats, setShowStats] = useState(false);
+  const [dismissedLowBalance, setDismissedLowBalance] = useState(false);
+  const wasLowBalance = useRef(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
 
@@ -203,6 +217,18 @@ export default function HomeScreen() {
   const rateLimitPercent = rateLimit
     ? Math.min(100, (rateLimit.remainingRequests / rateLimit.limitRequests) * 100)
     : 0;
+  const dailyUsedPercent = rateLimit
+    ? Math.min(100, ((rateLimit.limitRequests - rateLimit.remainingRequests) / rateLimit.limitRequests) * 100)
+    : 0;
+  const dailyBarColor = rateLimitPercent < 10 ? "#c0392b" : "#2980b9";
+
+  const isLowBalance = rateLimit != null && rateLimit.remainingRequests <= 100;
+  useEffect(() => {
+    if (isLowBalance && !wasLowBalance.current) {
+      setDismissedLowBalance(false);
+    }
+    wasLowBalance.current = isLowBalance;
+  }, [isLowBalance]);
 
   if (loadingHistory) {
     return (
@@ -214,39 +240,52 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {usage ? (
-        <View style={styles.usageBox}>
-          <View style={styles.usageBarTrack}>
-            <View style={[styles.usageBarFill, { width: `${usagePercent}%`, backgroundColor: barColor }]} />
-          </View>
-          <Text style={styles.usageText}>
-            {usage.promptTokens.toLocaleString()} / {usage.contextWindow.toLocaleString()} tokens (
-            {usagePercent.toFixed(1)}%)
-          </Text>
-          {messagesLeftLabel ? <Text style={styles.usageSubtext}>{messagesLeftLabel}</Text> : null}
+      <Modal visible={showStats} animationType="fade" transparent onRequestClose={() => setShowStats(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Usage</Text>
+              <TouchableOpacity onPress={() => setShowStats(false)} hitSlop={8}>
+                <Text style={styles.closeIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
 
-          {rateLimit ? (
-            <>
-              <Text style={[styles.usageText, styles.rateLimitLabel]}>
-                {rateLimit.remainingRequests.toLocaleString()} / {rateLimit.limitRequests.toLocaleString()}{" "}
-                messages left today ({rateLimitProvider === "gemini" ? "Gemini's" : "Groq's"} free-tier daily
-                limit)
-              </Text>
-              <View style={styles.usageBarTrack}>
-                <View
-                  style={[
-                    styles.usageBarFill,
-                    {
-                      width: `${rateLimitPercent}%`,
-                      backgroundColor: rateLimitPercent < 10 ? "#c0392b" : "#2980b9",
-                    },
-                  ]}
+            {usage || rateLimit ? (
+              <>
+                <RingChart
+                  outerPercent={usagePercent}
+                  outerColor={barColor}
+                  innerPercent={dailyUsedPercent}
+                  innerColor={dailyBarColor}
                 />
-              </View>
-            </>
-          ) : null}
+                <View style={styles.modalLegend}>
+                  <View style={styles.legendRow}>
+                    <View style={[styles.legendDot, { backgroundColor: barColor }]} />
+                    <Text style={styles.legendText}>
+                      Context (outer):{" "}
+                      {usage
+                        ? `${usage.promptTokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} tokens (${usagePercent.toFixed(1)}%)`
+                        : "—"}
+                    </Text>
+                  </View>
+                  {messagesLeftLabel ? <Text style={styles.usageSubtext}>{messagesLeftLabel}</Text> : null}
+                  <View style={styles.legendRow}>
+                    <View style={[styles.legendDot, { backgroundColor: dailyBarColor }]} />
+                    <Text style={styles.legendText}>
+                      Daily (inner):{" "}
+                      {rateLimit
+                        ? `${rateLimit.remainingRequests.toLocaleString()} / ${rateLimit.limitRequests.toLocaleString()} left (${rateLimitProvider === "gemini" ? "Gemini" : "Groq"})`
+                        : "—"}
+                    </Text>
+                  </View>
+                </View>
+              </>
+            ) : (
+              <Text style={styles.placeholder}>Send a message to see usage stats.</Text>
+            )}
+          </View>
         </View>
-      ) : null}
+      </Modal>
 
       <ScrollView style={styles.messages} contentContainerStyle={{ padding: 16 }}>
         {messages.length === 0 ? (
@@ -281,6 +320,18 @@ export default function HomeScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
+      {isLowBalance && !dismissedLowBalance ? (
+        <View style={styles.lowBalanceBanner}>
+          <Text style={styles.lowBalanceText}>
+            Only {rateLimit!.remainingRequests} message{rateLimit!.remainingRequests === 1 ? "" : "s"} left today (
+            {rateLimitProvider === "gemini" ? "Gemini's" : "Groq's"} free-tier limit)
+          </Text>
+          <TouchableOpacity onPress={() => setDismissedLowBalance(true)} hitSlop={8}>
+            <Text style={styles.closeIcon}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <View style={styles.voiceRow}>
         <Button
           title={recorderState.isRecording ? "Stop" : "Talk"}
@@ -299,6 +350,9 @@ export default function HomeScreen() {
           placeholder="Or type a message"
           onSubmitEditing={send}
         />
+        <TouchableOpacity style={styles.statsButton} onPress={() => setShowStats(true)}>
+          <Text style={styles.statsButtonText}>📊</Text>
+        </TouchableOpacity>
         <Button title="Send" onPress={send} />
       </View>
     </View>
@@ -314,26 +368,56 @@ const styles = StyleSheet.create({
   assistant: { fontFamily: fonts.regular, marginBottom: 8 },
   system: { fontFamily: fonts.regular, marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
   error: { fontFamily: fonts.regular, color: "#c0392b", paddingHorizontal: 16 },
-  usageBox: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+  usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1, marginLeft: 16 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  usageBarTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#eee",
-    overflow: "hidden",
+  modalCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 20,
+    alignItems: "center",
+    width: 300,
+    maxWidth: "90%",
   },
-  usageBarFill: {
-    height: "100%",
-    borderRadius: 3,
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    width: "100%",
+    marginBottom: 12,
   },
-  usageText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", marginTop: 4 },
-  usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1 },
-  rateLimitLabel: { marginTop: 10 },
+  modalTitle: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222" },
+  closeIcon: { fontFamily: fonts.medium, fontSize: 16, color: "#888" },
+  modalLegend: { marginTop: 16, width: "100%" },
+  legendRow: { flexDirection: "row", alignItems: "center", marginTop: 8 },
+  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
+  legendText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", flexShrink: 1 },
+  statsButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#f0f0f0",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  statsButtonText: { fontSize: 18 },
+  lowBalanceBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: "#fdecea",
+    borderWidth: 1,
+    borderColor: "#f0b4ac",
+  },
+  lowBalanceText: { fontFamily: fonts.medium, fontSize: 12, color: "#8a291d", flex: 1, marginRight: 8 },
   thinkingBox: {
     marginHorizontal: 16,
     marginBottom: 8,
