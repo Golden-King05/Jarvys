@@ -70,6 +70,13 @@ export interface MapData {
   verified?: boolean;
 }
 
+// A request to turn a map layer on or off — the assistant can ask for this,
+// but the layer state itself lives entirely on the client.
+export interface LayerCommand {
+  layer: "radar" | "timezones" | "pins";
+  enabled: boolean;
+}
+
 export interface ChatResponse {
   reply: string | null;
   usage: ChatUsage | null;
@@ -80,6 +87,7 @@ export interface ChatResponse {
   provider: Provider | null;
   providerNote: string | null;
   mapData: MapData | null;
+  layerCommand: LayerCommand | null;
   toolsUsed: string[];
 }
 

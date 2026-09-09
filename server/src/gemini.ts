@@ -1,9 +1,9 @@
 import { convertCurrency } from "./currency.js";
 import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, incrementProviderUsage, type PointTag } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
-import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
+import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, LayerCommand, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
-import { getConditions } from "./weather.js";
+import { getConditions, getForecast } from "./weather.js";
 import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -229,6 +229,32 @@ const SEARCH_WIKIPEDIA_TOOL = {
         required: ["key"],
       },
     },
+    {
+      name: "get_weather_forecast",
+      description:
+        "Get the multi-day weather forecast for a location (highs, lows, condition, chance of precipitation per day) — use this for tomorrow's weather, this week's forecast, or any future day, as opposed to get_weather which is current conditions only. Also drops a pin on the user's map.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to check, e.g. a city or address." },
+          days: { type: "number", description: "How many days to forecast, including today (default 5, max 16)." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "set_map_layer",
+      description:
+        "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), or 'pins' (their saved points). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+      parameters: {
+        type: "object",
+        properties: {
+          layer: { type: "string", enum: ["radar", "timezones", "pins"], description: "Which layer to change." },
+          enabled: { type: "boolean", description: "true to turn it on, false to turn it off." },
+        },
+        required: ["layer", "enabled"],
+      },
+    },
   ],
 };
 
@@ -360,7 +386,7 @@ function parseTagsArg(value: unknown): PointTag[] | undefined {
 async function executeTool(
   call: GeminiFunctionCall,
   userId: string
-): Promise<{ result: unknown; mapData: MapData | null }> {
+): Promise<{ result: unknown; mapData: MapData | null; layerCommand?: LayerCommand | null }> {
   const args = call.args ?? {};
 
   if (call.name === "search_wikipedia") {
@@ -499,6 +525,45 @@ async function executeTool(
         ],
       },
     };
+  }
+
+  if (call.name === "get_weather_forecast") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const days = typeof args.days === "number" ? args.days : 5;
+    const result = await getForecast(location, days);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: result.days[0]?.icon ?? "🌡️",
+            category: "forecast",
+            blurb: result.days
+              .map((d) => `${d.date}: ${d.icon} ${d.condition}, ${d.lowF}–${d.highF}°F, ${d.precipitationChance}% precip`)
+              .join("\n"),
+          },
+        ],
+      },
+    };
+  }
+
+  if (call.name === "set_map_layer") {
+    const layer = args.layer;
+    if (layer !== "radar" && layer !== "timezones" && layer !== "pins") {
+      return { result: { error: "layer must be 'radar', 'timezones', or 'pins'" }, mapData: null };
+    }
+    if (typeof args.enabled !== "boolean") {
+      return { result: { error: "Missing required 'enabled' boolean argument" }, mapData: null };
+    }
+    return { result: { ok: true }, mapData: null, layerCommand: { layer, enabled: args.enabled } };
   }
 
   if (call.name === "get_local_time") {
@@ -683,6 +748,7 @@ export async function getGeminiReply(params: {
       provider: "gemini",
       providerNote: null,
       mapData: null,
+      layerCommand: null,
       toolsUsed: [],
     };
   }
@@ -697,6 +763,7 @@ export async function getGeminiReply(params: {
 
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let mapData: MapData | null = null;
+  let layerCommand: LayerCommand | null = null;
   const toolsUsed = new Set<string>();
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -755,14 +822,20 @@ export async function getGeminiReply(params: {
         provider: "gemini",
         providerNote: null,
         mapData,
+        layerCommand,
         toolsUsed: [...toolsUsed],
       };
     }
 
     contents.push({ role: "model", parts });
     toolsUsed.add(functionCallPart.functionCall.name);
-    const { result, mapData: toolMapData } = await executeTool(functionCallPart.functionCall, params.userId);
+    const {
+      result,
+      mapData: toolMapData,
+      layerCommand: toolLayerCommand,
+    } = await executeTool(functionCallPart.functionCall, params.userId);
     if (toolMapData) mapData = toolMapData;
+    if (toolLayerCommand) layerCommand = toolLayerCommand;
     contents.push({
       role: "user",
       parts: [
@@ -787,6 +860,7 @@ export async function getGeminiReply(params: {
     provider: "gemini",
     providerNote: null,
     mapData,
+    layerCommand,
     toolsUsed: [...toolsUsed],
   };
 }

@@ -103,3 +103,71 @@ export async function getConditions(place: string): Promise<Conditions | { error
   };
 }
 
+interface OpenMeteoDailyResponse {
+  timezone: string;
+  daily: {
+    time: string[];
+    weather_code: number[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+    precipitation_probability_max: number[];
+  };
+}
+
+export interface ForecastDay {
+  date: string;
+  highF: number;
+  lowF: number;
+  condition: string;
+  icon: string;
+  precipitationChance: number;
+}
+
+export interface Forecast {
+  location: string;
+  lat: number;
+  lon: number;
+  timezone: string;
+  days: ForecastDay[];
+}
+
+// Same Open-Meteo endpoint as getConditions, just asking for daily
+// aggregates instead of the current snapshot — free, no API key, up to 16
+// days out.
+export async function getForecast(place: string, days = 5): Promise<Forecast | { error: string }> {
+  const point = await geocode(place);
+  if ("error" in point) return point;
+
+  const params = new URLSearchParams({
+    latitude: String(point.lat),
+    longitude: String(point.lon),
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+    temperature_unit: "fahrenheit",
+    timezone: "auto",
+    forecast_days: String(Math.min(Math.max(1, Math.round(days)), 16)),
+  });
+  const res = await fetch(`${FORECAST_URL}?${params}`);
+  if (!res.ok) {
+    return { error: `Forecast lookup failed (${res.status})` };
+  }
+  const data = (await res.json()) as OpenMeteoDailyResponse;
+
+  return {
+    location: point.name,
+    lat: point.lat,
+    lon: point.lon,
+    timezone: data.timezone,
+    days: data.daily.time.map((date, i) => {
+      const { text, icon } = describeWeatherCode(data.daily.weather_code[i]);
+      return {
+        date,
+        highF: data.daily.temperature_2m_max[i],
+        lowF: data.daily.temperature_2m_min[i],
+        condition: text,
+        icon,
+        precipitationChance: data.daily.precipitation_probability_max[i],
+      };
+    }),
+  };
+}
+

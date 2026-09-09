@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Button,
+  Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,7 +19,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { api, type MapData, type Provider } from "../api";
+import { api, type LayerCommand, type MapData, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
@@ -70,9 +72,10 @@ function renderFormattedText(text: string) {
 interface HomeScreenProps {
   onMapData: (data: MapData) => void;
   verifySignal?: number;
+  onLayerCommand?: (cmd: LayerCommand) => void;
 }
 
-export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps) {
+export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: HomeScreenProps) {
   const { baseUrl, token } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -89,9 +92,11 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
   const [lastProvider, setLastProvider] = useState<Provider | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [dismissedLowBalance, setDismissedLowBalance] = useState(false);
+  const [thinking, setThinking] = useState(false);
   const wasLowBalance = useRef(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
+  const scrollViewRef = useRef<ScrollView>(null);
 
   // Load the account's saved conversation on open, so it survives a refresh
   // or picks up where another device left off.
@@ -133,6 +138,7 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
     }
     if (result.provider) setLastProvider(result.provider);
     if (result.mapData) onMapData(result.mapData);
+    if (result.layerCommand) onLayerCommand?.(result.layerCommand);
 
     setMessages((prev) => [
       ...prev,
@@ -166,10 +172,13 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
     setError(null);
     setPendingThinking(null);
     setMessages((prev) => [...prev, { from: "you", text }]);
+    setThinking(true);
     try {
       await requestReply(text);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to send message");
+    } finally {
+      setThinking(false);
     }
   }
 
@@ -222,8 +231,21 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
       }
     } else {
       try {
-        const permission = await AudioModule.requestRecordingPermissionsAsync();
+        // Check the current status first — iOS only ever shows its native
+        // permission dialog once per install. Calling requestRecordingPermissionsAsync
+        // again after that (canAskAgain: false) silently returns the same
+        // denied result with no dialog, which is why tapping Talk repeatedly
+        // looked like nothing was happening. The only way to actually fix it
+        // from there is the Settings app, so send the user there directly.
+        let permission = await AudioModule.getRecordingPermissionsAsync();
         if (!permission.granted) {
+          permission = await AudioModule.requestRecordingPermissionsAsync();
+        }
+        if (!permission.granted) {
+          if (!permission.canAskAgain && Platform.OS !== "web") {
+            Linking.openSettings();
+            throw new Error("Microphone access is off for Jarvys — enable it in Settings, then tap Talk again.");
+          }
           throw new Error("Microphone permission is required to talk to the assistant.");
         }
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -264,6 +286,12 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
     ? Math.min(100, ((rateLimit.limitRequests - rateLimit.remainingRequests) / rateLimit.limitRequests) * 100)
     : 0;
   const dailyBarColor = rateLimitPercent < 10 ? "#c0392b" : "#2980b9";
+
+  // Keeps the newest message (or the thinking indicator) in view instead of
+  // leaving the user staring at whatever was previously at the bottom.
+  useEffect(() => {
+    scrollViewRef.current?.scrollToEnd({ animated: true });
+  }, [messages, thinking]);
 
   const isLowBalance = rateLimit != null && rateLimit.remainingRequests <= 100;
   useEffect(() => {
@@ -330,7 +358,7 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
         </View>
       </Modal>
 
-      <ScrollView style={styles.messages} contentContainerStyle={{ padding: 16 }}>
+      <ScrollView ref={scrollViewRef} style={styles.messages} contentContainerStyle={{ padding: 16 }}>
         {messages.length === 0 ? (
           <Text style={styles.placeholder}>Say something to your assistant.</Text>
         ) : null}
@@ -346,6 +374,12 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
             {m.from === "assistant" && m.toolsUsed?.length ? <ApiUsedBadge toolsUsed={m.toolsUsed} /> : null}
           </View>
         ))}
+        {thinking ? (
+          <View style={styles.thinkingIndicator}>
+            <ActivityIndicator size="small" color="#888" />
+            <Text style={styles.thinkingIndicatorText}>Thinking…</Text>
+          </View>
+        ) : null}
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}
       </ScrollView>
 
@@ -414,6 +448,8 @@ const styles = StyleSheet.create({
   assistant: { fontFamily: fonts.regular, marginBottom: 8 },
   bold: { fontFamily: fonts.semiBold },
   system: { fontFamily: fonts.regular, marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
+  thinkingIndicator: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4, marginBottom: 8 },
+  thinkingIndicatorText: { fontFamily: fonts.regular, color: "#888", fontSize: 13 },
   error: { fontFamily: fonts.regular, color: "#c0392b", paddingHorizontal: 16 },
   usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1, marginLeft: 16 },
   modalOverlay: {

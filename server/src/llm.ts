@@ -3,7 +3,7 @@ import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, type Point
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
-import { getConditions } from "./weather.js";
+import { getConditions, getForecast } from "./weather.js";
 import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -93,6 +93,14 @@ export interface MapData {
   verified?: boolean;
 }
 
+// A request to turn a map layer on or off — pure UI state the client owns,
+// so the assistant can't set it directly; this just tells the client what
+// the user asked for.
+export interface LayerCommand {
+  layer: "radar" | "timezones" | "pins";
+  enabled: boolean;
+}
+
 export interface ChatResult {
   reply: string | null;
   usage: ChatUsage | null;
@@ -110,6 +118,9 @@ export interface ChatResult {
   // client already knows why in that case, this covers the case it doesn't.
   providerNote: string | null;
   mapData: MapData | null;
+  // Set when the assistant called set_map_layer this turn — the client
+  // applies it to its own layer-visibility state.
+  layerCommand: LayerCommand | null;
   // Names of every tool actually called while producing this reply (e.g.
   // "search_wikipedia", "get_weather") — lets the client show a collapsed
   // "API used" marker instead of having the model narrate its own sourcing
@@ -249,6 +260,40 @@ const GET_WEATHER_TOOL = {
         location: { type: "string", description: "The place to check, e.g. a city or address." },
       },
       required: ["location"],
+    },
+  },
+};
+
+const GET_WEATHER_FORECAST_TOOL = {
+  type: "function",
+  function: {
+    name: "get_weather_forecast",
+    description:
+      "Get the multi-day weather forecast for a location (highs, lows, condition, chance of precipitation per day) — use this for tomorrow's weather, this week's forecast, or any future day, as opposed to get_weather which is current conditions only. Also drops a pin on the user's map.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "The place to check, e.g. a city or address." },
+        days: { type: "number", description: "How many days to forecast, including today (default 5, max 16)." },
+      },
+      required: ["location"],
+    },
+  },
+};
+
+const SET_MAP_LAYER_TOOL = {
+  type: "function",
+  function: {
+    name: "set_map_layer",
+    description:
+      "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), or 'pins' (their saved points). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+    parameters: {
+      type: "object",
+      properties: {
+        layer: { type: "string", enum: ["radar", "timezones", "pins"], description: "Which layer to change." },
+        enabled: { type: "boolean", description: "true to turn it on, false to turn it off." },
+      },
+      required: ["layer", "enabled"],
     },
   },
 };
@@ -485,7 +530,10 @@ function parseTagsArg(value: unknown): PointTag[] | undefined {
   return tags;
 }
 
-async function executeTool(call: ToolCall, userId: string): Promise<{ result: unknown; mapData: MapData | null }> {
+async function executeTool(
+  call: ToolCall,
+  userId: string
+): Promise<{ result: unknown; mapData: MapData | null; layerCommand?: LayerCommand | null }> {
   const name = call.function.name;
   let args: Record<string, unknown>;
   try {
@@ -630,6 +678,44 @@ async function executeTool(call: ToolCall, userId: string): Promise<{ result: un
         ],
       },
     };
+  }
+
+  if (name === "get_weather_forecast") {
+    if (typeof args.location !== "string" || !args.location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const days = typeof args.days === "number" ? args.days : 5;
+    const result = await getForecast(args.location, days);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: result.days[0]?.icon ?? "🌡️",
+            category: "forecast",
+            blurb: result.days
+              .map((d) => `${d.date}: ${d.icon} ${d.condition}, ${d.lowF}–${d.highF}°F, ${d.precipitationChance}% precip`)
+              .join("\n"),
+          },
+        ],
+      },
+    };
+  }
+
+  if (name === "set_map_layer") {
+    const layer = args.layer;
+    if (layer !== "radar" && layer !== "timezones" && layer !== "pins") {
+      return { result: { error: "layer must be 'radar', 'timezones', or 'pins'" }, mapData: null };
+    }
+    if (typeof args.enabled !== "boolean") {
+      return { result: { error: "Missing required 'enabled' boolean argument" }, mapData: null };
+    }
+    return { result: { ok: true }, mapData: null, layerCommand: { layer, enabled: args.enabled } };
   }
 
   if (name === "get_local_time") {
@@ -795,7 +881,8 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
-    "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
+    "You can check current weather with get_weather. For tomorrow's weather, this week's forecast, or any future day, use get_weather_forecast instead — it covers multiple days at once, so call it once even for a range like 'this weekend' rather than repeatedly. Both also drop a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
+    "You can turn a map layer on or off for the user with set_map_layer — 'radar' (live weather radar overlay), 'timezones' (time zone bands), or 'pins' (their saved points) — whenever they ask to show, hide, turn on/off, or toggle one of these.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
     "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
     "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",
@@ -844,6 +931,7 @@ function blankResult(reply: string, droppedMessages: number): ChatResult {
     provider: null,
     providerNote: null,
     mapData: null,
+    layerCommand: null,
     toolsUsed: [],
   };
 }
@@ -868,6 +956,7 @@ async function runGroqPath(params: {
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let rateLimit: DailyRateLimit | null = null;
   let mapData: MapData | null = null;
+  let layerCommand: LayerCommand | null = null;
   const toolsUsed = new Set<string>();
 
   if (offerThinkingTool) {
@@ -891,6 +980,7 @@ async function runGroqPath(params: {
         provider: null,
         providerNote: null,
         mapData: null,
+        layerCommand: null,
         toolsUsed: [],
       };
     }
@@ -917,6 +1007,8 @@ async function runGroqPath(params: {
     GET_WIKIPEDIA_ARTICLE_TOOL,
     LIST_SAVED_TAG_KEYS_TOOL,
     FIND_POINTS_BY_TAG_TOOL,
+    GET_WEATHER_FORECAST_TOOL,
+    SET_MAP_LAYER_TOOL,
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -987,6 +1079,7 @@ async function runGroqPath(params: {
         provider: "groq",
         providerNote: null,
         mapData: mapData ?? regionsFromReply(reply),
+        layerCommand,
         toolsUsed: [...toolsUsed],
       };
     }
@@ -994,8 +1087,9 @@ async function runGroqPath(params: {
     messages.push({ role: "assistant", content: responseMessage.content, tool_calls: responseMessage.tool_calls });
     for (const call of responseMessage.tool_calls) {
       toolsUsed.add(call.function.name);
-      const { result, mapData: toolMapData } = await executeTool(call, userId);
+      const { result, mapData: toolMapData, layerCommand: toolLayerCommand } = await executeTool(call, userId);
       if (toolMapData) mapData = toolMapData;
+      if (toolLayerCommand) layerCommand = toolLayerCommand;
       messages.push({
         role: "tool",
         tool_call_id: call.id,
@@ -1015,6 +1109,7 @@ async function runGroqPath(params: {
     provider: "groq",
     providerNote: null,
     mapData,
+    layerCommand,
     toolsUsed: [...toolsUsed],
   };
 }

@@ -23,6 +23,15 @@ import { suggestIcon } from "../utils/suggestIcon";
 interface MapScreenProps {
   mapData: MapData | null;
   onVerifyMap: () => void;
+  // Lifted up to App.tsx so they survive this screen unmounting on tab
+  // switch, and so the assistant's set_map_layer tool (handled in App.tsx)
+  // can change them regardless of which tab is active.
+  showRadar: boolean;
+  setShowRadar: (v: boolean) => void;
+  showTimezoneBands: boolean;
+  setShowTimezoneBands: (v: boolean) => void;
+  showPins: boolean;
+  setShowPins: (v: boolean) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awaiting-tap";
@@ -42,7 +51,16 @@ function toMapPoint(p: Point): MapPoint {
   };
 }
 
-export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
+export default function MapScreen({
+  mapData,
+  onVerifyMap,
+  showRadar,
+  setShowRadar,
+  showTimezoneBands,
+  setShowTimezoneBands,
+  showPins,
+  setShowPins,
+}: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
   const [points, setPoints] = useState<Point[]>([]);
@@ -98,9 +116,6 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   }
 
   const [showLayers, setShowLayers] = useState(false);
-  const [showRadar, setShowRadar] = useState(false);
-  const [showTimezoneBands, setShowTimezoneBands] = useState(false);
-  const [showPins, setShowPins] = useState(true);
 
   // Below this zoom, saved points stay hidden — with enough of them saved,
   // a fully zoomed-out view turns into an unreadable wall of overlapping

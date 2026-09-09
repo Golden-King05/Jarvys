@@ -10,7 +10,7 @@ import {
 } from "@expo-google-fonts/inter";
 import { AuthProvider, useAuth } from "./src/AuthContext";
 import { fonts } from "./src/theme";
-import type { MapData } from "./src/api";
+import type { LayerCommand, MapData } from "./src/api";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import MapScreen from "./src/screens/MapScreen";
@@ -22,6 +22,18 @@ function AuthedApp() {
   const [tab, setTab] = useState<Tab>("chat");
   const [mapData, setMapData] = useState<MapData | null>(null);
   const [verifySignal, setVerifySignal] = useState(0);
+  // Lifted out of MapScreen so they survive switching away from the Map tab
+  // (MapScreen unmounts when hidden) and so the assistant's set_map_layer
+  // tool can change them from the Chat tab too.
+  const [showRadar, setShowRadar] = useState(false);
+  const [showTimezoneBands, setShowTimezoneBands] = useState(false);
+  const [showPins, setShowPins] = useState(true);
+
+  function handleLayerCommand(cmd: LayerCommand) {
+    if (cmd.layer === "radar") setShowRadar(cmd.enabled);
+    else if (cmd.layer === "timezones") setShowTimezoneBands(cmd.enabled);
+    else if (cmd.layer === "pins") setShowPins(cmd.enabled);
+  }
 
   return (
     <View style={styles.flex}>
@@ -40,7 +52,7 @@ function AuthedApp() {
       </View>
       <View style={styles.flex}>
         <View style={[styles.flex, tab !== "chat" && styles.hidden]}>
-          <HomeScreen onMapData={setMapData} verifySignal={verifySignal} />
+          <HomeScreen onMapData={setMapData} verifySignal={verifySignal} onLayerCommand={handleLayerCommand} />
         </View>
         {tab === "map" ? (
           <MapScreen
@@ -49,6 +61,12 @@ function AuthedApp() {
               setTab("chat");
               setVerifySignal((n) => n + 1);
             }}
+            showRadar={showRadar}
+            setShowRadar={setShowRadar}
+            showTimezoneBands={showTimezoneBands}
+            setShowTimezoneBands={setShowTimezoneBands}
+            showPins={showPins}
+            setShowPins={setShowPins}
           />
         ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}
