@@ -16,6 +16,16 @@ const FLIGHTS_POLL_MS = 20000;
 // whether the viewport has wandered outside the last-fetched area, so it
 // can be much less frequent than the flights poll above.
 const WIKI_POLL_MS = 8000;
+// findArticlesInArea tiles the requested area into at most 12 geosearch
+// calls, each covering only a 10km radius around its own tile center — fine
+// for a city-sized viewport, but at a zoomed-out (state/country-sized) view
+// those 12 tiles land tens or hundreds of km apart, so nearly all of them
+// miss every article and the few results that do turn up (from whichever
+// lone tile happened to land near a town) look like they're all bunched in
+// one spot instead of spread across the map. Below this zoom the layer
+// shows nothing rather than that misleading result, the same way saved pins
+// stay hidden until zoomed in.
+const MIN_WIKI_ZOOM = 12;
 
 interface MapCanvasProps {
   points: MapPoint[];
@@ -155,7 +165,7 @@ export default function MapCanvas({
   }, [showFlights, baseUrl, token]);
 
   useEffect(() => {
-    if (!showWikipedia || !token) {
+    if (!showWikipedia || !token || currentZoom < MIN_WIKI_ZOOM) {
       setWikiClusters([]);
       lastWikiFetchBox.current = null;
       return;
@@ -190,7 +200,7 @@ export default function MapCanvas({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [showWikipedia, baseUrl, token]);
+  }, [showWikipedia, baseUrl, token, currentZoom]);
 
   function fitToContent() {
     if (!mapRef.current) return;
