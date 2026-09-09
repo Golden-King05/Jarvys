@@ -23,7 +23,15 @@ interface TavilySearchResponse {
 // Search Engine specifically to skip its "Search the entire web" setup step
 // (a real, reported UI-toggle bug on that product) — Tavily searches the
 // whole web by default with nothing to configure beyond the key itself.
-export async function searchWeb(query: string): Promise<WebSearchResult[] | { error: string }> {
+//
+// The success case is wrapped in { results } rather than returned as a bare
+// array — confirmed in production that Gemini's function-response API
+// rejects a top-level array (its proto schema requires the response to be a
+// single object/struct, not a repeating field), which surfaced as an
+// opaque-looking "Gemini backup also failed" for every search_web call,
+// even though Groq (an ordinary JSON.stringify, no such restriction) never
+// had a problem with it.
+export async function searchWeb(query: string): Promise<{ results: WebSearchResult[] } | { error: string }> {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) {
     return {
@@ -44,11 +52,13 @@ export async function searchWeb(query: string): Promise<WebSearchResult[] | { er
     }
     const data = (await res.json()) as TavilySearchResponse;
     const results = data.results ?? [];
-    return results.slice(0, MAX_RESULTS).map((r) => ({
-      title: r.title,
-      url: r.url,
-      snippet: r.content ?? "",
-    }));
+    return {
+      results: results.slice(0, MAX_RESULTS).map((r) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.content ?? "",
+      })),
+    };
   } catch (err) {
     return { error: `Web search failed: ${err instanceof Error ? err.message : "network error"}` };
   }
