@@ -7,6 +7,7 @@ import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
+import { searchWeb } from "./websearch.js";
 import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -171,6 +172,22 @@ const SEARCH_WIKIPEDIA_TOOL = {
       type: "object",
       properties: {
         query: { type: "string", description: "What to search for on Wikipedia." },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+const SEARCH_WEB_TOOL = {
+  type: "function",
+  function: {
+    name: "search_web",
+    description:
+      "Search the general web and return a short list of titles, URLs, and snippets. Use this for information Wikipedia wouldn't have — a local business, current news, product details, prices, hours, or a real place too small or obscure for its own Wikipedia article. Try search_wikipedia first for a well-known person, place, or topic.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query." },
       },
       required: ["query"],
     },
@@ -643,6 +660,14 @@ async function executeTool(
     };
   }
 
+  if (name === "search_web") {
+    if (typeof args.query !== "string" || !args.query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    const result = await searchWeb(args.query);
+    return { result, mapData: null };
+  }
+
   if (name === "get_wikipedia_article") {
     if (typeof args.urlOrTitle !== "string" || !args.urlOrTitle) {
       return { result: { error: "Missing required 'urlOrTitle' argument" }, mapData: null };
@@ -1068,6 +1093,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about. Don't narrate that you used a tool or which source you checked — the app shows that separately, so just answer directly.",
     "Wikipedia's search matches keywords, not questions — searching the literal question text (e.g. 'oldest building in New York City') often returns an unrelated top result. Instead, identify the specific person/place/thing the question is most likely about from your own knowledge first, then search for that specific name to confirm and get details — never repeat the raw question as the search query.",
     "Only state facts the tool result actually contains — don't add extra specifics (an address, neighborhood, exact date, etc.) from your own memory that the result didn't confirm.",
+    "For information Wikipedia wouldn't have — a local business, current news, product details, prices, hours, or a real place too small or obscure for its own Wikipedia article — use search_web instead. Try search_wikipedia first for a well-known person, place, or topic; fall back to search_web when it returns nothing relevant, and likewise only state what the results actually say.",
     "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map.",
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
@@ -1077,7 +1103,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "find_flights_near shows live aircraft currently flying near a location, via OpenSky — use it when the user asks what's flying overhead or near somewhere; it's a live snapshot, not saved to their map.",
     "You can turn a map layer on or off for the user with set_map_layer — 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), 'flights' (a live-updating layer of nearby aircraft), or 'wikipedia' (nearby geotagged Wikipedia articles, browsable right on the map) — whenever they ask to show, hide, turn on/off, or toggle one of these. Never say a layer is now on or off unless you actually called set_map_layer this turn — claiming it without calling the tool leaves the map unchanged and misleads them.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
-    "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — and it's a specific named real-world building or landmark you don't already have solid, confident knowledge of (most of them), call search_wikipedia for it first rather than writing from scratch; a specific-sounding name doesn't mean you actually know real details about it. If it returns a genuine match, ground the description in those real facts. If it returns nothing relevant, or the place is clearly personal/generic rather than a notable landmark (someone's favorite coffee shop, a business with no real public record), write a general description in your own words — but never state a specific street address, exact founding/built year, county, or named historical figure as fact unless a real source actually confirmed it; when you don't know a specific like that, leave it out or say it's not something you could confirm rather than inventing a plausible-sounding one. Then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point or search_wikipedia more than once each for the same request.",
+    "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — and it's a specific named real-world building or landmark you don't already have solid, confident knowledge of (most of them), call search_wikipedia for it first rather than writing from scratch; a specific-sounding name doesn't mean you actually know real details about it. If that returns nothing relevant, try search_web next — plenty of real local landmarks, historic buildings, and small businesses have no Wikipedia article but do have other real coverage online. If either turns up a genuine match, ground the description in those real facts. If neither does, or the place is clearly personal/generic rather than a notable landmark (someone's favorite coffee shop, a business with no real public record), write a general description in your own words — but never state a specific street address, exact founding/built year, county, or named historical figure as fact unless a real source actually confirmed it; when you don't know a specific like that, leave it out or say it's not something you could confirm rather than inventing a plausible-sounding one. Then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point, search_wikipedia, or search_web more than once each for the same request.",
     "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",
     "If the user asks you to find, locate, or list Wikipedia articles or landmarks across a whole area (a county, city, park — not one specific place), call find_wikipedia_articles_in_area instead of search_wikipedia; it previews every result on their map at once. Mention how many were found and ask if they'd like them added — if the tool result says the area was too large to fully cover, say so rather than implying the list is complete.",
     "Points can carry tags — header/value pairs like {key: 'architecture', value: 'Victorian'} or {key: 'start_date', value: '1886'} — for attributes worth searching on later. When you have something worth tagging on a point you're proposing with propose_map_point, call list_saved_tag_keys first and reuse a header already in use whenever one fits (e.g. always 'architecture', never a near-duplicate like 'building_architecture') — nothing else enforces that consistency. 'architecture' (an architectural style) and 'start_date' (when something was built or established, as a plain year like '1886' or a date) are common headers worth setting on landmarks and buildings when you know them; add other headers freely when something else about the place is worth tagging. If the user asks to find their points by some attribute (e.g. 'my Victorian buildings'), call find_points_by_tag.",
@@ -1139,6 +1165,7 @@ function blankResult(reply: string, droppedMessages: number): ChatResult {
 // serialize it once.
 const GROQ_TOOLS = [
   SEARCH_WIKIPEDIA_TOOL,
+  SEARCH_WEB_TOOL,
   FIND_PLACES_TOOL,
   CALCULATE_DISTANCE_TOOL,
   HIGHLIGHT_REGIONS_TOOL,

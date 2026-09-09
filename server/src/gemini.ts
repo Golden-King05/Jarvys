@@ -7,6 +7,7 @@ import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, LayerCommand, Map
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
+import { searchWeb } from "./websearch.js";
 import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -34,6 +35,18 @@ const SEARCH_WIKIPEDIA_TOOL = {
         type: "object",
         properties: {
           query: { type: "string", description: "What to search for on Wikipedia." },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "search_web",
+      description:
+        "Search the general web and return a short list of titles, URLs, and snippets. Use this for information Wikipedia wouldn't have — a local business, current news, product details, prices, hours, or a real place too small or obscure for its own Wikipedia article. Try search_wikipedia first for a well-known person, place, or topic.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query." },
         },
         required: ["query"],
       },
@@ -470,6 +483,15 @@ async function executeTool(
         ],
       },
     };
+  }
+
+  if (call.name === "search_web") {
+    const query = args.query;
+    if (typeof query !== "string" || !query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    const result = await searchWeb(query);
+    return { result, mapData: null };
   }
 
   if (call.name === "get_wikipedia_article") {
