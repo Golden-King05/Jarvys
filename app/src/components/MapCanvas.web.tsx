@@ -80,6 +80,10 @@ interface MapCanvasProps {
   // area.
   showWikipedia?: boolean;
   onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
+  // Shows the user's live position via the browser's own Geolocation API —
+  // the caller is responsible for having already secured permission (the
+  // browser prompts natively on the first watchPosition call regardless).
+  showLiveLocation?: boolean;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -101,6 +105,14 @@ const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
 function emojiIcon(L: Leaflet, icon: string) {
   return L.divIcon({
     html: `<div style="font-size:22px;line-height:1;transform:translate(-50%,-50%)">${icon}</div>`,
+    className: "",
+    iconSize: [0, 0],
+  });
+}
+
+function liveLocationIcon(L: Leaflet) {
+  return L.divIcon({
+    html: `<div style="width:16px;height:16px;border-radius:50%;background:#2980b9;border:3px solid #fff;box-shadow:0 0 4px rgba(0,0,0,0.4);transform:translate(-50%,-50%)"></div>`,
     className: "",
     iconSize: [0, 0],
   });
@@ -134,6 +146,7 @@ export default function MapCanvas({
   showFlights,
   showWikipedia,
   onWikipediaClusterPress,
+  showLiveLocation,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
@@ -145,6 +158,8 @@ export default function MapCanvas({
   const tzLayerRef = useRef<Leaflet>(null);
   const flightsLayerRef = useRef<Leaflet>(null);
   const wikiLayerRef = useRef<Leaflet>(null);
+  const liveLocationMarkerRef = useRef<Leaflet>(null);
+  const liveLocationWatchId = useRef<number | null>(null);
   const lastWikiFetchBox = useRef<LatLonBox | null>(null);
   const hasFitInitially = useRef(false);
   const onMapPressRef = useRef(onMapPress);
@@ -478,6 +493,58 @@ export default function MapCanvas({
       clearInterval(interval);
     };
   }, [showWikipedia, baseUrl, token, wikiZoomedIn]);
+
+  // react-native-maps has a built-in showsUserLocation for the native build
+  // (its own platform location layer) — the web build has no such thing, so
+  // this drives an equivalent dot straight off the browser's own Geolocation
+  // API. watchPosition (rather than a one-off getCurrentPosition) is what
+  // makes it "live" — the browser prompts for permission on the first call
+  // if it hasn't already been granted or denied.
+  useEffect(() => {
+    if (!showLiveLocation) {
+      if (liveLocationWatchId.current != null) {
+        navigator.geolocation.clearWatch(liveLocationWatchId.current);
+        liveLocationWatchId.current = null;
+      }
+      loadLeaflet().then((L) => {
+        const map = mapInstance.current;
+        if (map && liveLocationMarkerRef.current) {
+          map.removeLayer(liveLocationMarkerRef.current);
+          liveLocationMarkerRef.current = null;
+        }
+      });
+      return;
+    }
+    if (!("geolocation" in navigator)) return;
+    let cancelled = false;
+    loadLeaflet().then((L) => {
+      if (cancelled) return;
+      liveLocationWatchId.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const map = mapInstance.current;
+          if (!map) return;
+          const latlng: [number, number] = [position.coords.latitude, position.coords.longitude];
+          if (!liveLocationMarkerRef.current) {
+            liveLocationMarkerRef.current = L.marker(latlng, { icon: liveLocationIcon(L) }).addTo(map);
+          } else {
+            liveLocationMarkerRef.current.setLatLng(latlng);
+          }
+        },
+        // A denied/unavailable position just means no dot appears — the
+        // Layers panel toggle is the only feedback surface on web, and a
+        // failed watch doesn't need to disturb whatever else is on screen.
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000 }
+      );
+    });
+    return () => {
+      cancelled = true;
+      if (liveLocationWatchId.current != null) {
+        navigator.geolocation.clearWatch(liveLocationWatchId.current);
+        liveLocationWatchId.current = null;
+      }
+    };
+  }, [showLiveLocation]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }

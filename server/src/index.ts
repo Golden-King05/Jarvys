@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { authRouter } from "./routes/auth.js";
 import { assistantRouter } from "./routes/assistant.js";
 import { flightsRouter } from "./routes/flights.js";
+import { geocodeRouter } from "./routes/geocode.js";
 import { pointsRouter } from "./routes/points.js";
 import { wikipediaRouter } from "./routes/wikipedia.js";
 
@@ -18,6 +19,7 @@ app.use("/assistant", assistantRouter);
 app.use("/points", pointsRouter);
 app.use("/flights", flightsRouter);
 app.use("/wikipedia", wikipediaRouter);
+app.use("/geocode", geocodeRouter);
 
 // Last-resort net: any route error that reaches here (typically forwarded by
 // asyncHandler) gets a clean response instead of an unhandled exception.

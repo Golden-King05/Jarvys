@@ -50,6 +50,11 @@ interface MapCanvasProps {
   // area.
   showWikipedia?: boolean;
   onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
+  // Shows the user's live position (a native blue dot via react-native-maps,
+  // backed by Apple/Google's own location layer) — the caller is
+  // responsible for having already secured permission before turning this
+  // on, same as every other permission-gated feature in this app.
+  showLiveLocation?: boolean;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -106,6 +111,7 @@ export default function MapCanvas({
   showFlights,
   showWikipedia,
   onWikipediaClusterPress,
+  showLiveLocation,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
@@ -265,6 +271,8 @@ export default function MapCanvas({
       }
       onPress={(e) => onMapPress?.(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
       onRegionChangeComplete={(region) => setCurrentZoom(zoomFromLongitudeDelta(region.longitudeDelta))}
+      showsUserLocation={showLiveLocation}
+      showsMyLocationButton={showLiveLocation}
     >
       {radarTemplate ? (
         // RainViewer's radar tiles only actually exist up to zoom 7 — past

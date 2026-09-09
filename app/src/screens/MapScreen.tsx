@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Linking,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -85,6 +87,18 @@ export default function MapScreen({
   const [selectedPoint, setSelectedPoint] = useState<Point | MapPoint | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
   const [selectedWikiCluster, setSelectedWikiCluster] = useState<WikipediaCluster | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResult, setSearchResult] = useState<MapPoint | null>(null);
+
+  // Not lifted to App.tsx like the other layers — there's no reason for the
+  // AI chat to toggle this the way it toggles radar/pins/flights, and
+  // dropping the GPS watch when the user leaves the Map tab (rather than
+  // keeping it running app-wide) is the behavior you'd actually want.
+  const [showLiveLocation, setShowLiveLocation] = useState(false);
+  const [liveLocationError, setLiveLocationError] = useState<string | null>(null);
 
   const [addStep, setAddStep] = useState<AddStep>("closed");
   const [pendingLocation, setPendingLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -224,6 +238,58 @@ export default function MapScreen({
     urlIconLocked.current = false;
     setUrlDraft({ url, name: title, category: "", subcategory: "", icon: "", tags: [] });
     setAddStep("url");
+  }
+
+  async function handleSearch() {
+    const query = searchQuery.trim();
+    if (!query || !token) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const found = await api.geocode(baseUrl, token, query);
+      setSearchResult({ label: found.name, lat: found.lat, lon: found.lon, icon: "🔍" });
+      setFocusSignal((n) => n + 1);
+    } catch (e) {
+      setSearchResult(null);
+      setSearchError(e instanceof Error ? e.message : "Location not found");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function clearSearch() {
+    setSearchQuery("");
+    setSearchResult(null);
+    setSearchError(null);
+  }
+
+  async function toggleLiveLocation(value: boolean) {
+    if (!value) {
+      setShowLiveLocation(false);
+      setLiveLocationError(null);
+      return;
+    }
+    try {
+      // Same reasoning as the mic permission fix — iOS only ever shows its
+      // native dialog once per install, so check the current status first
+      // rather than blindly requesting every time, and send the user to
+      // Settings directly once a request would just silently no-op.
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (!permission.granted) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+      if (!permission.granted) {
+        if (!permission.canAskAgain && Platform.OS !== "web") {
+          Linking.openSettings();
+        }
+        setLiveLocationError("Location access is off for Jarvys — enable it in Settings to show your live position.");
+        return;
+      }
+      setLiveLocationError(null);
+      setShowLiveLocation(true);
+    } catch {
+      setLiveLocationError("Couldn't get location permission.");
+    }
   }
 
   async function finishUrlImport(lat: number, lon: number) {
@@ -390,8 +456,9 @@ export default function MapScreen({
   // re-fire and re-zoom out to fit everything, every time.
   const markers = useMemo(() => {
     const savedMarkers = points.map(toMapPoint);
-    return mapData?.kind === "distance" ? [...savedMarkers, ...mapData.points] : savedMarkers;
-  }, [points, mapData]);
+    const withDistance = mapData?.kind === "distance" ? [...savedMarkers, ...mapData.points] : savedMarkers;
+    return searchResult ? [...withDistance, searchResult] : withDistance;
+  }, [points, mapData, searchResult]);
   const regions = mapData?.kind === "regions" ? mapData.regions : undefined;
   const hasStatusLegend = regions?.some((r) => r.status) ?? false;
 
@@ -414,9 +481,35 @@ export default function MapScreen({
           showFlights={showFlights}
           showWikipedia={showWikipedia}
           onWikipediaClusterPress={setSelectedWikiCluster}
+          showLiveLocation={showLiveLocation}
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
         />
+
+        <View style={styles.searchBar}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search for a place or address"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onSubmitEditing={handleSearch}
+            returnKeyType="search"
+            autoCapitalize="none"
+          />
+          {searchQuery || searchResult ? (
+            <TouchableOpacity onPress={clearSearch} hitSlop={8} style={styles.searchClearButton}>
+              <Text style={styles.searchClearText}>✕</Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity onPress={handleSearch} disabled={searching} style={styles.searchButton}>
+            <Text style={styles.searchButtonText}>{searching ? "…" : "🔍"}</Text>
+          </TouchableOpacity>
+        </View>
+        {searchError ? (
+          <View style={styles.searchErrorBanner}>
+            <Text style={styles.searchErrorText}>{searchError}</Text>
+          </View>
+        ) : null}
 
         {addStep === "awaiting-tap" ? (
           <View style={styles.tapBanner}>
@@ -513,6 +606,16 @@ export default function MapScreen({
                 <Text style={styles.layerHint}>Browse nearby articles right on the map</Text>
               </View>
               <Switch value={showWikipedia} onValueChange={setShowWikipedia} />
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Live location</Text>
+                <Text style={styles.layerHint}>
+                  {liveLocationError ?? "Show your current position, updating as you move"}
+                </Text>
+              </View>
+              <Switch value={showLiveLocation} onValueChange={toggleLiveLocation} />
             </View>
           </View>
         </View>
@@ -739,7 +842,7 @@ const styles = StyleSheet.create({
   layersButtonText: { fontSize: 22 },
   tapBanner: {
     position: "absolute",
-    top: 12,
+    top: 68,
     left: 12,
     right: 12,
     backgroundColor: "#fff",
@@ -753,6 +856,47 @@ const styles = StyleSheet.create({
   },
   tapBannerText: { fontFamily: fonts.medium, fontSize: 13, color: "#222" },
   tapBannerCancel: { fontFamily: fonts.medium, fontSize: 13, color: "#c0392b" },
+  searchBar: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingLeft: 12,
+    elevation: 4,
+    zIndex: 1000,
+  },
+  searchInput: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    paddingVertical: 12,
+  },
+  searchClearButton: { paddingHorizontal: 8 },
+  searchClearText: { fontFamily: fonts.medium, fontSize: 14, color: "#888" },
+  searchButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderLeftWidth: 1,
+    borderLeftColor: "#eee",
+  },
+  searchButtonText: { fontSize: 16 },
+  searchErrorBanner: {
+    position: "absolute",
+    top: 60,
+    left: 12,
+    right: 12,
+    backgroundColor: "#fdecea",
+    borderWidth: 1,
+    borderColor: "#f0b4ac",
+    borderRadius: 8,
+    padding: 8,
+    zIndex: 1000,
+  },
+  searchErrorText: { fontFamily: fonts.regular, fontSize: 12, color: "#8a291d" },
   infoBox: { padding: 12, borderTopWidth: 1, borderTopColor: "#eee" },
   verifyButton: { alignSelf: "center", paddingVertical: 8 },
   verifyButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },

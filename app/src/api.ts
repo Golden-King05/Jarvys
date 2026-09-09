@@ -84,6 +84,12 @@ export interface MapBoundingBox {
   east: number;
 }
 
+export interface GeocodeResult {
+  name: string;
+  lat: number;
+  lon: number;
+}
+
 export interface WikipediaArticle {
   pageid: number;
   title: string;
@@ -300,6 +306,10 @@ export const api = {
       `/wikipedia/nearby?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}&limit=${limit}`,
       { token }
     ),
+
+  // A direct "find this place" lookup — backs the map's search bar.
+  geocode: (baseUrl: string, token: string, query: string) =>
+    request<GeocodeResult>(baseUrl, `/geocode?q=${encodeURIComponent(query)}`, { token }),
 
   createPoint: (baseUrl: string, token: string, point: NewPoint) =>
     request<Point>(baseUrl, "/points", { method: "POST", token, body: point }),
