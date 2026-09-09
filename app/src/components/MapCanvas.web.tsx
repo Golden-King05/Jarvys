@@ -49,6 +49,13 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Bump this (e.g. a counter) when the camera should re-fit to the current
+  // points/regions — a brand new AI result arriving, say. Without an
+  // explicit signal like this, the map would have to guess "did the point
+  // set meaningfully change" from the array reference alone, and refreshing
+  // the same points after an edit or a drag looks identical to that check,
+  // which is what caused re-zooming out on every interaction.
+  focusKey?: number;
 }
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
@@ -73,14 +80,31 @@ export default function MapCanvas({
   pendingMarker,
   showRadar,
   showTimezoneBands,
+  focusKey,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
   const layerGroup = useRef<Leaflet>(null);
   const radarLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
+  const hasFitInitially = useRef(false);
   const onMapPressRef = useRef(onMapPress);
   onMapPressRef.current = onMapPress;
+
+  function fitToContent(L: Leaflet, map: Leaflet) {
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lon], 13);
+    } else if (points.length > 1) {
+      const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+      map.fitBounds(bounds, { padding: [60, 60] });
+    } else if (regions && regions.length > 0) {
+      const bounds = L.geoJSON({
+        type: "FeatureCollection",
+        features: regions.map((r) => ({ type: "Feature", properties: {}, geometry: r.geometry })),
+      }).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -164,19 +188,42 @@ export default function MapCanvas({
           { color: "#2980b9", weight: 3 }
         ).addTo(layer);
       }
-
-      const allPins = pendingMarker ? [...points, { lat: pendingMarker.lat, lon: pendingMarker.lon }] : points;
-      if (allPins.length === 1) {
-        map.setView([allPins[0].lat, allPins[0].lon], 13);
-      } else if (allPins.length > 1) {
-        const bounds = L.latLngBounds(allPins.map((p) => [p.lat, p.lon]));
-        map.fitBounds(bounds, { padding: [60, 60] });
-      } else if (regions && regions.length > 0) {
-        const layerBounds = layer.getBounds?.();
-        if (layerBounds?.isValid?.()) map.fitBounds(layerBounds, { padding: [40, 40] });
-      }
     });
   }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress, onPointDragEnd]);
+
+  // Fits once, the first time there's anything to show — not on every
+  // subsequent points/regions change, since refreshing the same points
+  // after a tap, an edit, or a drag looks identical to "new content
+  // arrived" from the array alone. A deliberate re-fit (e.g. a brand new
+  // search result) goes through the focusKey effect below instead.
+  useEffect(() => {
+    let cancelled = false;
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      if (cancelled || !map) return;
+      if (!hasFitInitially.current && (points.length > 0 || (regions && regions.length > 0))) {
+        fitToContent(L, map);
+        hasFitInitially.current = true;
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [points, regions]);
+
+  useEffect(() => {
+    if (focusKey === undefined) return;
+    let cancelled = false;
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      if (!cancelled && map) fitToContent(L, map);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
 
   // Radar and timezone bands live on their own persistent layers (not the
   // layerGroup above, which gets torn down and rebuilt on every points/

@@ -19,6 +19,13 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Bump this (e.g. a counter) when the camera should re-fit to the current
+  // points/regions — a brand new AI result arriving, say. Without an
+  // explicit signal like this, the map would have to guess "did the point
+  // set meaningfully change" from the array reference alone, and refreshing
+  // the same points after an edit or a drag looks identical to that check,
+  // which is what caused re-zooming out on every interaction.
+  focusKey?: number;
 }
 
 const DEFAULT_REGION = {
@@ -49,8 +56,10 @@ export default function MapCanvas({
   pendingMarker,
   showRadar,
   showTimezoneBands,
+  focusKey,
 }: MapCanvasProps) {
   const mapRef = useRef<MapView>(null);
+  const hasFitInitially = useRef(false);
   const [radarTemplate, setRadarTemplate] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,18 +76,19 @@ export default function MapCanvas({
     };
   }, [showRadar]);
 
-  useEffect(() => {
-    if (points.length > 1 && mapRef.current) {
+  function fitToContent() {
+    if (!mapRef.current) return;
+    if (points.length > 1) {
       mapRef.current.fitToCoordinates(
         points.map((p) => ({ latitude: p.lat, longitude: p.lon })),
         { edgePadding: { top: 60, right: 60, bottom: 60, left: 60 }, animated: true }
       );
-    } else if (points.length === 1 && mapRef.current) {
+    } else if (points.length === 1) {
       mapRef.current.animateToRegion(
         { latitude: points[0].lat, longitude: points[0].lon, latitudeDelta: 0.05, longitudeDelta: 0.05 },
         500
       );
-    } else if (points.length === 0 && regions && regions.length > 0 && mapRef.current) {
+    } else if (regions && regions.length > 0) {
       const coordinates = regions
         .flatMap((r) => outerRings(r.geometry))
         .flat()
@@ -90,7 +100,24 @@ export default function MapCanvas({
         });
       }
     }
+  }
+
+  // Fits once, the first time there's anything to show — not on every
+  // subsequent points/regions change, since refreshing the same points
+  // after a tap, an edit, or a drag looks identical to "new content
+  // arrived" from the array alone. A deliberate re-fit (e.g. a brand new
+  // search result) goes through the focusKey effect below instead.
+  useEffect(() => {
+    if (!hasFitInitially.current && (points.length > 0 || (regions && regions.length > 0))) {
+      fitToContent();
+      hasFitInitially.current = true;
+    }
   }, [points, regions]);
+
+  useEffect(() => {
+    if (focusKey !== undefined) fitToContent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
 
   return (
     <MapView

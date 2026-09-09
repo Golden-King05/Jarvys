@@ -63,6 +63,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   const [showLayers, setShowLayers] = useState(false);
   const [showRadar, setShowRadar] = useState(false);
   const [showTimezoneBands, setShowTimezoneBands] = useState(false);
+  const [focusSignal, setFocusSignal] = useState(0);
 
   useEffect(() => {
     if (mapData) return; // The AI's plotted points drive the view instead once there are any.
@@ -91,6 +92,10 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   useEffect(() => {
     loadPoints();
     // Re-pull whenever a new search backs up fresh points server-side.
+    // Also nudges the map to re-center on this new result — but only for a
+    // genuinely new mapData (this effect's whole dependency), never just
+    // because the points list itself refreshed after an edit or a drag.
+    if (mapData) setFocusSignal((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapData]);
 
@@ -280,6 +285,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
           pendingMarker={addStep === "details" ? pendingLocation : null}
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
+          focusKey={focusSignal}
         />
 
         {addStep === "awaiting-tap" ? (
