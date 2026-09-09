@@ -43,7 +43,31 @@ await db.executeMultiple(`
 
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user_created
     ON chat_messages(user_id, created_at);
+
+  -- Gemini doesn't return remaining-quota headers the way Groq does, so we
+  -- track our own call count per UTC day to show a comparable "X left
+  -- today" figure once a conversation is running on Gemini.
+  CREATE TABLE IF NOT EXISTS provider_usage (
+    provider TEXT NOT NULL,
+    usage_date TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (provider, usage_date)
+  );
 `);
+
+export async function incrementProviderUsage(provider: string): Promise<number> {
+  const today = new Date().toISOString().slice(0, 10);
+  await db.execute({
+    sql: `INSERT INTO provider_usage (provider, usage_date, count) VALUES (?, ?, 1)
+          ON CONFLICT(provider, usage_date) DO UPDATE SET count = count + 1`,
+    args: [provider, today],
+  });
+  const result = await db.execute({
+    sql: "SELECT count FROM provider_usage WHERE provider = ? AND usage_date = ?",
+    args: [provider, today],
+  });
+  return Number((result.rows[0] as unknown as { count: number } | undefined)?.count ?? 0);
+}
 
 export interface UserRow {
   id: string;

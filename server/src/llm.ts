@@ -63,7 +63,19 @@ export interface ChatResult {
   providerNote: string | null;
 }
 
-class GroqRateLimitError extends Error {}
+class GroqRateLimitError extends Error {
+  retryAfterSeconds: number | null;
+  constructor(message: string, retryAfterSeconds: number | null) {
+    super(message);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+function readRetryAfter(res: Response): number | null {
+  const header = res.headers.get("retry-after");
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) ? seconds : null;
+}
 
 interface ToolCall {
   id: string;
@@ -134,7 +146,7 @@ async function checkDifficulty(apiKey: string, message: string): Promise<Difficu
     // Groq itself is out of capacity (daily or per-minute) — the caller
     // fails the whole turn over to Gemini rather than trying the main
     // Groq call next, which would just hit the same wall.
-    throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"));
+    throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"), readRetryAfter(res));
   }
   if (!res.ok) {
     // Fail safe: some other classifier hiccup — just skip straight to
@@ -249,7 +261,13 @@ export async function getAssistantReply(params: {
   // returned a thinkingRequest and they clicked yes) — hand this one to
   // Gemini instead of Groq. See getGeminiReply for why.
   if (reasoningEffort === "default") {
-    const result = await getGeminiReply({ systemPrompt, message: params.message, history, droppedMessages });
+    const result = await getGeminiReply({
+      systemPrompt,
+      message: params.message,
+      history,
+      droppedMessages,
+      thinking: true,
+    });
     return { ...result, provider: "gemini", providerNote: null };
   }
 
@@ -318,7 +336,7 @@ export async function getAssistantReply(params: {
       });
 
       if (res.status === 429) {
-        throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"));
+        throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"), readRetryAfter(res));
       }
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
@@ -390,11 +408,19 @@ export async function getAssistantReply(params: {
     // Groq is out of capacity for now (daily or per-minute) — Gemini picks
     // up this turn instead of failing the message outright. It gets the
     // same trimmed history, so the conversation continues without a gap.
-    const result = await getGeminiReply({ systemPrompt, message: params.message, history, droppedMessages });
+    const result = await getGeminiReply({
+      systemPrompt,
+      message: params.message,
+      history,
+      droppedMessages,
+      thinking: false,
+    });
+    const retrySuffix =
+      err.retryAfterSeconds != null ? ` (back in about ${Math.ceil(err.retryAfterSeconds)}s)` : "";
     return {
       ...result,
       provider: "gemini",
-      providerNote: "Groq's limit was reached, so this reply came from Gemini instead.",
+      providerNote: `Groq's limit was reached${retrySuffix}, so this reply came from Gemini instead.`,
     };
   }
 }

@@ -47,6 +47,7 @@ export default function HomeScreen() {
   const [muted, setMuted] = useState(false);
   const [usage, setUsage] = useState<UsageState | null>(null);
   const [rateLimit, setRateLimit] = useState<RateLimitState | null>(null);
+  const [rateLimitProvider, setRateLimitProvider] = useState<Provider | null>(null);
   const [promptTokenHistory, setPromptTokenHistory] = useState<number[]>([]);
   const [pendingThinking, setPendingThinking] = useState<PendingThinking | null>(null);
   const [resolvingThinking, setResolvingThinking] = useState(false);
@@ -98,6 +99,7 @@ export default function HomeScreen() {
     }
     if (result.rateLimit) {
       setRateLimit(result.rateLimit);
+      setRateLimitProvider(result.provider);
     }
     if (result.compressed) {
       setMessages((prev) => [
@@ -227,7 +229,8 @@ export default function HomeScreen() {
             <>
               <Text style={[styles.usageText, styles.rateLimitLabel]}>
                 {rateLimit.remainingRequests.toLocaleString()} / {rateLimit.limitRequests.toLocaleString()}{" "}
-                messages left today (Groq's free-tier daily limit)
+                messages left today ({rateLimitProvider === "gemini" ? "Gemini's" : "Groq's"} free-tier daily
+                limit)
               </Text>
               <View style={styles.usageBarTrack}>
                 <View
