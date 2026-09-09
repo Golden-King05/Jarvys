@@ -1,5 +1,5 @@
 import { convertCurrency } from "./currency.js";
-import { findMapPointsByName, incrementProviderUsage } from "./db.js";
+import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, incrementProviderUsage, type PointTag } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
@@ -156,6 +156,19 @@ const SEARCH_WIKIPEDIA_TOOL = {
           subcategory: { type: "string", description: "A more specific subcategory, if useful." },
           icon: { type: "string", description: "A single emoji that fits the place, e.g. 🌉 for a bridge." },
           description: { type: "string", description: "The description you wrote for this place, in your own words." },
+          tags: {
+            type: "array",
+            description:
+              "Structured header/value labels for this point, e.g. {key: 'architecture', value: 'Victorian'} or {key: 'start_date', value: '1886'}. Call list_saved_tag_keys first and reuse an existing header when one fits, instead of inventing a near-duplicate (e.g. 'architecture' vs 'building_architecture'). Optional — omit if nothing meaningful to tag.",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string", description: "The tag header, e.g. 'architecture', 'start_date'." },
+                value: { type: "string", description: "The value for that header, e.g. 'Victorian', '1886'." },
+              },
+              required: ["key", "value"],
+            },
+          },
         },
         required: ["name", "location", "category", "description"],
       },
@@ -195,6 +208,25 @@ const SEARCH_WIKIPEDIA_TOOL = {
           limit: { type: "number", description: "Max number of articles to return (default 20, max 40)." },
         },
         required: ["location"],
+      },
+    },
+    {
+      name: "list_saved_tag_keys",
+      description:
+        "List every tag header already used across the user's saved points (e.g. 'architecture', 'start_date'). Call this before tagging a point with propose_map_point so you reuse an existing header instead of inventing a near-duplicate — nothing enforces this, so checking first is the only way headers stay consistent.",
+      parameters: { type: "object", properties: {} },
+    },
+    {
+      name: "find_points_by_tag",
+      description:
+        "Find the user's saved points that have a given tag header, optionally filtered to a specific value (e.g. header 'architecture', value 'Victorian'). Use this when the user asks to find or list their points by some attribute rather than by name or location.",
+      parameters: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: "The tag header to match, e.g. 'architecture'." },
+          value: { type: "string", description: "Optional value to also match, e.g. 'Victorian'." },
+        },
+        required: ["key"],
       },
     },
   ],
@@ -307,6 +339,22 @@ export async function verifyRegionStatuses(
   });
 
   return { mapData: { kind: "regions", points: [], regionType, regions, verified: true } };
+}
+
+function parseTagsArg(value: unknown): PointTag[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tags: PointTag[] = [];
+  for (const entry of value) {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as any).key === "string" &&
+      typeof (entry as any).value === "string"
+    ) {
+      tags.push({ key: (entry as any).key, value: (entry as any).value });
+    }
+  }
+  return tags;
 }
 
 async function executeTool(
@@ -510,6 +558,7 @@ async function executeTool(
             category: typeof args.category === "string" ? args.category : "",
             subcategory: typeof args.subcategory === "string" ? args.subcategory : undefined,
             blurb: description,
+            tags: parseTagsArg(args.tags),
           },
         ],
       },
@@ -533,6 +582,34 @@ async function executeTool(
           lon: r.lon,
           blurb: r.blurb,
           urls: JSON.parse(r.urls_json),
+          tags: JSON.parse(r.tags_json),
+        })),
+      },
+      mapData: null,
+    };
+  }
+
+  if (call.name === "list_saved_tag_keys") {
+    return { result: { keys: await getDistinctTagKeys(userId) }, mapData: null };
+  }
+
+  if (call.name === "find_points_by_tag") {
+    const key = args.key;
+    if (typeof key !== "string" || !key) {
+      return { result: { error: "Missing required 'key' argument" }, mapData: null };
+    }
+    const value = typeof args.value === "string" ? args.value : undefined;
+    const rows = await findMapPointsByTag(userId, key, value);
+    return {
+      result: {
+        matches: rows.map((r) => ({
+          name: r.name,
+          category: r.category,
+          subcategory: r.subcategory,
+          lat: r.lat,
+          lon: r.lon,
+          blurb: r.blurb,
+          tags: JSON.parse(r.tags_json),
         })),
       },
       mapData: null,

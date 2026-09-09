@@ -1,5 +1,5 @@
 import { convertCurrency } from "./currency.js";
-import { findMapPointsByName } from "./db.js";
+import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, type PointTag } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
@@ -50,6 +50,11 @@ export interface ThinkingRequest {
 
 export type Provider = "groq" | "gemini";
 
+export interface MapPointTag {
+  key: string;
+  value: string;
+}
+
 export interface MapPoint {
   label: string;
   lat: number;
@@ -60,6 +65,7 @@ export interface MapPoint {
   subcategory?: string;
   urls?: string[];
   blurb?: string;
+  tags?: MapPointTag[];
 }
 
 export interface RegionMapData {
@@ -297,6 +303,19 @@ const PROPOSE_MAP_POINT_TOOL = {
         subcategory: { type: "string", description: "A more specific subcategory, if useful." },
         icon: { type: "string", description: "A single emoji that fits the place, e.g. 🌉 for a bridge." },
         description: { type: "string", description: "The description you wrote for this place, in your own words." },
+        tags: {
+          type: "array",
+          description:
+            "Structured header/value labels for this point, e.g. {key: 'architecture', value: 'Victorian'} or {key: 'start_date', value: '1886'}. Call list_saved_tag_keys first and reuse an existing header when one fits, instead of inventing a near-duplicate (e.g. 'architecture' vs 'building_architecture'). Optional — omit if nothing meaningful to tag.",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "The tag header, e.g. 'architecture', 'start_date'." },
+              value: { type: "string", description: "The value for that header, e.g. 'Victorian', '1886'." },
+            },
+            required: ["key", "value"],
+          },
+        },
       },
       required: ["name", "location", "category", "description"],
     },
@@ -348,6 +367,33 @@ const FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL = {
         limit: { type: "number", description: "Max number of articles to return (default 20, max 40)." },
       },
       required: ["location"],
+    },
+  },
+};
+
+const LIST_SAVED_TAG_KEYS_TOOL = {
+  type: "function",
+  function: {
+    name: "list_saved_tag_keys",
+    description:
+      "List every tag header already used across the user's saved points (e.g. 'architecture', 'start_date'). Call this before tagging a point with propose_map_point so you reuse an existing header instead of inventing a near-duplicate — nothing enforces this, so checking first is the only way headers stay consistent.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
+const FIND_POINTS_BY_TAG_TOOL = {
+  type: "function",
+  function: {
+    name: "find_points_by_tag",
+    description:
+      "Find the user's saved points that have a given tag header, optionally filtered to a specific value (e.g. header 'architecture', value 'Victorian'). Use this when the user asks to find or list their points by some attribute rather than by name or location.",
+    parameters: {
+      type: "object",
+      properties: {
+        key: { type: "string", description: "The tag header to match, e.g. 'architecture'." },
+        value: { type: "string", description: "Optional value to also match, e.g. 'Victorian'." },
+      },
+      required: ["key"],
     },
   },
 };
@@ -426,6 +472,17 @@ function regionsFromReply(reply: string): MapData | null {
   const found = extractRegionsFromText(reply);
   if (!found) return null;
   return { kind: "regions", points: [], regionType: found.regionType, regions: found.regions };
+}
+
+function parseTagsArg(value: unknown): PointTag[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tags: PointTag[] = [];
+  for (const entry of value) {
+    if (entry && typeof entry === "object" && typeof (entry as any).key === "string" && typeof (entry as any).value === "string") {
+      tags.push({ key: (entry as any).key, value: (entry as any).value });
+    }
+  }
+  return tags;
 }
 
 async function executeTool(call: ToolCall, userId: string): Promise<{ result: unknown; mapData: MapData | null }> {
@@ -632,6 +689,7 @@ async function executeTool(call: ToolCall, userId: string): Promise<{ result: un
             category: typeof args.category === "string" ? args.category : "",
             subcategory: typeof args.subcategory === "string" ? args.subcategory : undefined,
             blurb: args.description,
+            tags: parseTagsArg(args.tags),
           },
         ],
       },
@@ -654,6 +712,33 @@ async function executeTool(call: ToolCall, userId: string): Promise<{ result: un
           lon: r.lon,
           blurb: r.blurb,
           urls: JSON.parse(r.urls_json),
+          tags: JSON.parse(r.tags_json),
+        })),
+      },
+      mapData: null,
+    };
+  }
+
+  if (name === "list_saved_tag_keys") {
+    return { result: { keys: await getDistinctTagKeys(userId) }, mapData: null };
+  }
+
+  if (name === "find_points_by_tag") {
+    if (typeof args.key !== "string" || !args.key) {
+      return { result: { error: "Missing required 'key' argument" }, mapData: null };
+    }
+    const value = typeof args.value === "string" ? args.value : undefined;
+    const rows = await findMapPointsByTag(userId, args.key, value);
+    return {
+      result: {
+        matches: rows.map((r) => ({
+          name: r.name,
+          category: r.category,
+          subcategory: r.subcategory,
+          lat: r.lat,
+          lon: r.lon,
+          blurb: r.blurb,
+          tags: JSON.parse(r.tags_json),
         })),
       },
       mapData: null,
@@ -715,6 +800,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
     "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",
     "If the user asks you to find, locate, or list Wikipedia articles or landmarks across a whole area (a county, city, park — not one specific place), call find_wikipedia_articles_in_area instead of search_wikipedia; it previews every result on their map at once. Mention how many were found and ask if they'd like them added — if the tool result says the area was too large to fully cover, say so rather than implying the list is complete.",
+    "Points can carry tags — header/value pairs like {key: 'architecture', value: 'Victorian'} or {key: 'start_date', value: '1886'} — for attributes worth searching on later. When you have something worth tagging on a point you're proposing with propose_map_point, call list_saved_tag_keys first and reuse a header already in use whenever one fits (e.g. always 'architecture', never a near-duplicate like 'building_architecture') — nothing else enforces that consistency. 'architecture' (an architectural style) and 'start_date' (when something was built or established, as a plain year like '1886' or a date) are common headers worth setting on landmarks and buildings when you know them; add other headers freely when something else about the place is worth tagging. If the user asks to find their points by some attribute (e.g. 'my Victorian buildings'), call find_points_by_tag.",
     instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
     .filter(Boolean)
@@ -829,6 +915,8 @@ async function runGroqPath(params: {
     FIND_SAVED_POINT_TOOL,
     FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL,
     GET_WIKIPEDIA_ARTICLE_TOOL,
+    LIST_SAVED_TAG_KEYS_TOOL,
+    FIND_POINTS_BY_TAG_TOOL,
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {

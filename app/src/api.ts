@@ -26,6 +26,14 @@ export interface ThinkingRequest {
 
 export type Provider = "groq" | "gemini";
 
+// A structured label on a point — a header (e.g. "architecture") and a value
+// (e.g. "Victorian"), so the same header naturally accumulates consistent
+// values across points instead of drifting into near-duplicate headers.
+export interface PointTag {
+  key: string;
+  value: string;
+}
+
 export interface MapPoint {
   // Only present when this point mirrors a saved Point (from the /points
   // list) — lets the map know it's editable/draggable, since an ephemeral
@@ -40,6 +48,7 @@ export interface MapPoint {
   subcategory?: string;
   urls?: string[];
   blurb?: string;
+  tags?: PointTag[];
 }
 
 export type RegionType = "us_state" | "country";
@@ -95,6 +104,7 @@ export interface Point {
   urls: string[];
   blurb: string;
   source: string;
+  tags: PointTag[];
   createdAt: string;
 }
 
@@ -115,6 +125,7 @@ export interface NewPoint {
   lon: number;
   urls?: string[];
   blurb?: string;
+  tags?: PointTag[];
 }
 
 export interface ImportPointFromUrl {
@@ -197,6 +208,11 @@ export const api = {
     }),
 
   getPoints: (baseUrl: string, token: string) => request<{ points: Point[] }>(baseUrl, "/points", { token }),
+
+  // Every tag header already in use across the account's points — powers the
+  // "pick an existing header" suggestions in the tag editor so headers
+  // naturally stay consistent instead of drifting into near-duplicates.
+  getTagKeys: (baseUrl: string, token: string) => request<{ keys: string[] }>(baseUrl, "/points/tags", { token }),
 
   createPoint: (baseUrl: string, token: string, point: NewPoint) =>
     request<Point>(baseUrl, "/points", { method: "POST", token, body: point }),

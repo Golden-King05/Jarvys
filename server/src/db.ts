@@ -71,6 +71,7 @@ await db.executeMultiple(`
     urls_json TEXT NOT NULL DEFAULT '[]',
     blurb TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL DEFAULT 'manual',
+    tags_json TEXT NOT NULL DEFAULT '[]',
     dedupe_key TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(user_id, dedupe_key)
@@ -93,6 +94,13 @@ for (const column of ["map_data_json", "tools_used_json"]) {
 // assistant_settings predates preferred_provider — same deal.
 try {
   await db.execute("ALTER TABLE assistant_settings ADD COLUMN preferred_provider TEXT NOT NULL DEFAULT 'groq'");
+} catch (err) {
+  if (!(err instanceof Error) || !/duplicate column/i.test(err.message)) throw err;
+}
+
+// map_points predates tags_json — same deal.
+try {
+  await db.execute("ALTER TABLE map_points ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'");
 } catch (err) {
   if (!(err instanceof Error) || !/duplicate column/i.test(err.message)) throw err;
 }
@@ -137,6 +145,15 @@ export interface ChatMessageRow {
   created_at: string;
 }
 
+// A structured label on a point — a header (e.g. "architecture") and a value
+// (e.g. "Victorian") rather than one free-text field, so the same header
+// naturally accumulates consistent values across points instead of drifting
+// into near-duplicate headers like "architecture" vs "building_architecture".
+export interface PointTag {
+  key: string;
+  value: string;
+}
+
 export interface MapPointRow {
   id: string;
   user_id: string;
@@ -149,6 +166,7 @@ export interface MapPointRow {
   urls_json: string;
   blurb: string;
   source: string;
+  tags_json: string;
   dedupe_key: string;
   created_at: string;
 }
@@ -163,6 +181,7 @@ export interface NewMapPoint {
   urls?: string[];
   blurb?: string;
   source?: string;
+  tags?: PointTag[];
 }
 
 function dedupeKeyFor(name: string, lat: number, lon: number): string {
@@ -196,11 +215,12 @@ export async function createMapPoint(userId: string, point: NewMapPoint): Promis
   const id = randomUUID();
   const dedupeKey = dedupeKeyFor(point.name, point.lat, point.lon);
   await db.execute({
-    sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, dedupe_key)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, tags_json, dedupe_key)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, dedupe_key) DO UPDATE SET
             name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
-            icon = excluded.icon, urls_json = excluded.urls_json, blurb = excluded.blurb, source = excluded.source`,
+            icon = excluded.icon, urls_json = excluded.urls_json, blurb = excluded.blurb, source = excluded.source,
+            tags_json = excluded.tags_json`,
     args: [
       id,
       userId,
@@ -213,6 +233,7 @@ export async function createMapPoint(userId: string, point: NewMapPoint): Promis
       JSON.stringify(point.urls ?? []),
       point.blurb ?? "",
       point.source ?? "manual",
+      JSON.stringify(point.tags ?? []),
       dedupeKey,
     ],
   });
@@ -229,8 +250,8 @@ export async function createMapPoint(userId: string, point: NewMapPoint): Promis
 export async function saveMapPointsFromSearch(userId: string, points: NewMapPoint[]): Promise<void> {
   for (const point of points) {
     await db.execute({
-      sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, dedupe_key)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, tags_json, dedupe_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, dedupe_key) DO NOTHING`,
       args: [
         randomUUID(),
@@ -244,6 +265,7 @@ export async function saveMapPointsFromSearch(userId: string, points: NewMapPoin
         JSON.stringify(point.urls ?? []),
         point.blurb ?? "",
         point.source ?? "search",
+        JSON.stringify(point.tags ?? []),
         dedupeKeyFor(point.name, point.lat, point.lon),
       ],
     });
@@ -267,6 +289,7 @@ export interface UpdateMapPoint {
   lon?: number;
   urls?: string[];
   blurb?: string;
+  tags?: PointTag[];
 }
 
 // Covers both edits from the detail form and a marker dragged to a new spot
@@ -292,11 +315,12 @@ export async function updateMapPoint(
     lon: patch.lon ?? row.lon,
     urls_json: patch.urls ? JSON.stringify(patch.urls) : row.urls_json,
     blurb: patch.blurb ?? row.blurb,
+    tags_json: patch.tags ? JSON.stringify(patch.tags) : row.tags_json,
   };
 
   await db.execute({
     sql: `UPDATE map_points
-          SET name = ?, category = ?, subcategory = ?, icon = ?, lat = ?, lon = ?, urls_json = ?, blurb = ?, dedupe_key = ?
+          SET name = ?, category = ?, subcategory = ?, icon = ?, lat = ?, lon = ?, urls_json = ?, blurb = ?, tags_json = ?, dedupe_key = ?
           WHERE id = ? AND user_id = ?`,
     args: [
       next.name,
@@ -307,6 +331,7 @@ export async function updateMapPoint(
       next.lon,
       next.urls_json,
       next.blurb,
+      next.tags_json,
       dedupeKeyFor(next.name, next.lat, next.lon),
       id,
       userId,
@@ -315,4 +340,43 @@ export async function updateMapPoint(
 
   const updated = await db.execute({ sql: "SELECT * FROM map_points WHERE id = ?", args: [id] });
   return updated.rows[0] as unknown as MapPointRow;
+}
+
+// Every distinct tag header the user has used across all their points, so
+// the client can suggest reusing "architecture" instead of drifting into
+// near-duplicates like "building_architecture" — nothing enforces this, it's
+// just what gets shown as suggestions when adding a new tag.
+export async function getDistinctTagKeys(userId: string): Promise<string[]> {
+  const rows = await getMapPoints(userId);
+  const keys = new Set<string>();
+  for (const row of rows) {
+    try {
+      const tags = JSON.parse(row.tags_json) as PointTag[];
+      for (const tag of tags) if (tag.key) keys.add(tag.key);
+    } catch {
+      // Malformed tags_json on some row — skip it rather than fail the whole list.
+    }
+  }
+  return [...keys].sort((a, b) => a.localeCompare(b));
+}
+
+// Lets the assistant answer "show me all my Victorian architecture pins" —
+// key match is exact (case-insensitive) since keys are meant to be reused
+// consistently; value match is a substring so "Victorian-era" still matches
+// a query for "Victorian".
+export async function findMapPointsByTag(userId: string, key: string, value?: string): Promise<MapPointRow[]> {
+  const rows = await getMapPoints(userId);
+  return rows.filter((row) => {
+    let tags: PointTag[];
+    try {
+      tags = JSON.parse(row.tags_json) as PointTag[];
+    } catch {
+      return false;
+    }
+    return tags.some(
+      (tag) =>
+        tag.key.toLowerCase() === key.toLowerCase() &&
+        (!value || tag.value.toLowerCase().includes(value.toLowerCase()))
+    );
+  });
 }

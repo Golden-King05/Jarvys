@@ -14,7 +14,8 @@ import MapCanvas from "../components/MapCanvas";
 import PointDetailModal from "../components/PointDetailModal";
 import RegionDetailModal from "../components/RegionDetailModal";
 import RegionLegend from "../components/RegionLegend";
-import { api, isSavedPoint, type MapData, type MapPoint, type Point, type RegionMapData } from "../api";
+import TagsEditor from "../components/TagsEditor";
+import { api, isSavedPoint, type MapData, type MapPoint, type Point, type PointTag, type RegionMapData } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { suggestIcon } from "../utils/suggestIcon";
@@ -37,6 +38,7 @@ function toMapPoint(p: Point): MapPoint {
     subcategory: p.subcategory || undefined,
     urls: p.urls,
     blurb: p.blurb,
+    tags: p.tags,
   };
 }
 
@@ -57,9 +59,17 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   } | null>(null);
   const [manualCoords, setManualCoords] = useState({ lat: "", lon: "" });
   const [urlDraft, setUrlDraft] = useState({ url: "", category: "", subcategory: "", icon: "" });
-  const [detailsDraft, setDetailsDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "" });
+  const [detailsDraft, setDetailsDraft] = useState<{
+    name: string;
+    category: string;
+    subcategory: string;
+    icon: string;
+    blurb: string;
+    tags: PointTag[];
+  }>({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", tags: [] });
   const [submitting, setSubmitting] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [tagKeys, setTagKeys] = useState<string[]>([]);
   // Once someone types their own icon, stop overwriting it with suggestions
   // based on category/subcategory — reset whenever a form is reopened.
   const urlIconLocked = useRef(false);
@@ -116,6 +126,23 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     }
   }
 
+  // Every tag header already in use — refreshed after a save so a header
+  // typed just now shows up as a suggestion for the next point too.
+  async function loadTagKeys() {
+    if (!token) return;
+    try {
+      const { keys } = await api.getTagKeys(baseUrl, token);
+      setTagKeys(keys);
+    } catch {
+      // No suggestions if this fails — the tag editor still works.
+    }
+  }
+
+  useEffect(() => {
+    loadTagKeys();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl, token]);
+
   useEffect(() => {
     loadPoints();
     // Re-pull whenever a new search backs up fresh points server-side.
@@ -132,7 +159,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     setPendingUrlFinish(null);
     setManualCoords({ lat: "", lon: "" });
     setUrlDraft({ url: "", category: "", subcategory: "", icon: "" });
-    setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "" });
+    setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", tags: [] });
     urlIconLocked.current = false;
     detailsIconLocked.current = false;
     setAddError(null);
@@ -200,8 +227,12 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
         lat: pendingLocation.lat,
         lon: pendingLocation.lon,
         blurb: detailsDraft.blurb.trim(),
+        tags: detailsDraft.tags
+          .map((t) => ({ key: t.key.trim(), value: t.value.trim() }))
+          .filter((t) => t.key && t.value),
       });
       await loadPoints();
+      await loadTagKeys();
       closeAddFlow();
     } catch (e) {
       setAddError(e instanceof Error ? e.message : "Failed to add point");
@@ -269,10 +300,12 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     icon: string;
     blurb: string;
     urls: string[];
+    tags: PointTag[];
   }) {
     if (!selectedPoint || !isSavedPoint(selectedPoint) || !token) return;
     const updated = await api.updatePoint(baseUrl, token, selectedPoint.id, patch);
     await loadPoints();
+    await loadTagKeys();
     setSelectedPoint(updated);
   }
 
@@ -536,6 +569,11 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
               multiline
               value={detailsDraft.blurb}
               onChangeText={(v) => setDetailsDraft((d) => ({ ...d, blurb: v }))}
+            />
+            <TagsEditor
+              tags={detailsDraft.tags}
+              onChange={(tags) => setDetailsDraft((d) => ({ ...d, tags }))}
+              suggestedKeys={tagKeys}
             />
             {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
             <View style={styles.formButtons}>

@@ -10,9 +10,11 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { isSavedPoint, type MapPoint, type Point } from "../api";
+import { api, isSavedPoint, type MapPoint, type Point, type PointTag } from "../api";
+import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { suggestIcon } from "../utils/suggestIcon";
+import TagsEditor from "./TagsEditor";
 
 type DetailSource = Point | MapPoint;
 
@@ -23,6 +25,7 @@ interface SavePatch {
   icon: string;
   blurb: string;
   urls: string[];
+  tags: PointTag[];
 }
 
 interface PointDetailModalProps {
@@ -42,10 +45,20 @@ function pointKey(point: DetailSource): string {
 // saved Point and an in-flight MapPoint from a fresh search look almost the
 // same, this just normalizes the field names between them.
 export default function PointDetailModal({ point, onClose, onDelete, onSave }: PointDetailModalProps) {
+  const { baseUrl, token } = useAuth();
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", urls: "" });
+  const [draft, setDraft] = useState<{
+    name: string;
+    category: string;
+    subcategory: string;
+    icon: string;
+    blurb: string;
+    urls: string;
+    tags: PointTag[];
+  }>({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", urls: "", tags: [] });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tagKeys, setTagKeys] = useState<string[]>([]);
   // Locked as soon as someone edits the icon field by hand, so category
   // suggestions stop overwriting a deliberate choice — reset on each edit.
   const iconLocked = useRef(false);
@@ -75,6 +88,7 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
   const subcategory = point.subcategory;
   const urls = point.urls ?? [];
   const blurb = point.blurb || (!saved ? point.address : "") || "";
+  const tags = point.tags ?? [];
 
   function startEditing() {
     setDraft({
@@ -84,10 +98,20 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
       icon,
       blurb,
       urls: urls.join("\n"),
+      tags,
     });
     iconLocked.current = false;
     setError(null);
     setEditing(true);
+    if (token) {
+      api
+        .getTagKeys(baseUrl, token)
+        .then(({ keys }) => setTagKeys(keys))
+        .catch(() => {
+          // No suggestions if this fails — the tag editor still works, just
+          // without existing headers to pick from.
+        });
+    }
   }
 
   async function save() {
@@ -109,6 +133,9 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
           .split("\n")
           .map((u) => u.trim())
           .filter(Boolean),
+        tags: draft.tags
+          .map((t) => ({ key: t.key.trim(), value: t.value.trim() }))
+          .filter((t) => t.key && t.value),
       });
       setEditing(false);
     } catch (e) {
@@ -172,6 +199,11 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
                 value={draft.urls}
                 onChangeText={(v) => setDraft((d) => ({ ...d, urls: v }))}
               />
+              <TagsEditor
+                tags={draft.tags}
+                onChange={(tags) => setDraft((d) => ({ ...d, tags }))}
+                suggestedKeys={tagKeys}
+              />
               {error ? <Text style={styles.error}>{error}</Text> : null}
               <View style={styles.formButtons}>
                 <TouchableOpacity onPress={() => setEditing(false)} disabled={saving}>
@@ -222,6 +254,18 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
                 </View>
               ) : null}
 
+              {tags.length > 0 ? (
+                <View style={styles.tagsBox}>
+                  {tags.map((t, i) => (
+                    <View key={i} style={styles.tagChip}>
+                      <Text style={styles.tagChipText}>
+                        {t.key}: {t.value}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
               {onSave || onDelete ? (
                 <View style={styles.actionsRow}>
                   {onSave ? (
@@ -258,6 +302,9 @@ const styles = StyleSheet.create({
   blurb: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 18, color: "#444" },
   urlsBox: { marginTop: 12, gap: 4 },
   url: { fontFamily: fonts.regular, fontSize: 12, color: "#2980b9" },
+  tagsBox: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 12 },
+  tagChip: { backgroundColor: "#f0f0f0", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
+  tagChipText: { fontFamily: fonts.medium, fontSize: 11, color: "#444" },
   actionsRow: { flexDirection: "row", gap: 20, marginTop: 16 },
   editText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
   deleteText: { fontFamily: fonts.medium, fontSize: 13, color: "#c0392b" },

@@ -1,11 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
-import { createMapPoint, deleteMapPoint, getMapPoints, updateMapPoint } from "../db.js";
+import { createMapPoint, deleteMapPoint, getDistinctTagKeys, getMapPoints, updateMapPoint, type PointTag } from "../db.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { importPointFromUrl } from "../pointImport.js";
 
 export const pointsRouter = Router();
 pointsRouter.use(requireAuth);
+
+const tagSchema = z.object({
+  key: z.string().min(1).max(40),
+  value: z.string().min(1).max(100),
+});
 
 function toApiPoint(row: {
   id: string;
@@ -18,6 +23,7 @@ function toApiPoint(row: {
   urls_json: string;
   blurb: string;
   source: string;
+  tags_json: string;
   created_at: string;
 }) {
   return {
@@ -31,6 +37,7 @@ function toApiPoint(row: {
     urls: JSON.parse(row.urls_json) as string[],
     blurb: row.blurb,
     source: row.source,
+    tags: JSON.parse(row.tags_json) as PointTag[],
     createdAt: row.created_at,
   };
 }
@@ -38,6 +45,16 @@ function toApiPoint(row: {
 pointsRouter.get("/", async (req: AuthedRequest, res) => {
   const rows = await getMapPoints(req.userId!);
   res.json({ points: rows.map(toApiPoint) });
+});
+
+// Every tag header already in use across the account's points — powers the
+// "pick an existing header" suggestion when adding a new tag, so headers
+// naturally converge (e.g. everyone reusing "architecture") instead of
+// drifting into near-duplicates. Nothing here enforces reuse, it just makes
+// what already exists easy to see and pick.
+pointsRouter.get("/tags", async (req: AuthedRequest, res) => {
+  const keys = await getDistinctTagKeys(req.userId!);
+  res.json({ keys });
 });
 
 const createSchema = z.object({
@@ -49,6 +66,7 @@ const createSchema = z.object({
   lon: z.number().min(-180).max(180),
   urls: z.array(z.string().url()).max(10).optional(),
   blurb: z.string().max(4000).optional(),
+  tags: z.array(tagSchema).max(20).optional(),
 });
 
 // A user-placed pin — either tapped directly on the map or typed in by
@@ -119,6 +137,7 @@ const updateSchema = z.object({
   lon: z.number().min(-180).max(180).optional(),
   urls: z.array(z.string().url()).max(10).optional(),
   blurb: z.string().max(4000).optional(),
+  tags: z.array(tagSchema).max(20).optional(),
 });
 
 // Covers both the detail-form edit and a marker dragged to a new spot on
