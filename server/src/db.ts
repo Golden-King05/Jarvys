@@ -1,4 +1,5 @@
 import { createClient, type Client } from "@libsql/client";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -53,7 +54,38 @@ await db.executeMultiple(`
     count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (provider, usage_date)
   );
+
+  -- Every pin on the map, whether the user placed it, imported it from a
+  -- URL, or the assistant found it via a search tool. dedupe_key stops a
+  -- repeated search from re-saving the same spot over and over.
+  CREATE TABLE IF NOT EXISTS map_points (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '',
+    subcategory TEXT NOT NULL DEFAULT '',
+    icon TEXT NOT NULL DEFAULT '📍',
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    urls_json TEXT NOT NULL DEFAULT '[]',
+    blurb TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
+    dedupe_key TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, dedupe_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_map_points_user ON map_points(user_id);
 `);
+
+// chat_messages predates map_data_json — add it for databases created before
+// this column existed. SQLite has no "ADD COLUMN IF NOT EXISTS", so ignore
+// the one error that means it's already there.
+try {
+  await db.execute("ALTER TABLE chat_messages ADD COLUMN map_data_json TEXT");
+} catch (err) {
+  if (!(err instanceof Error) || !/duplicate column/i.test(err.message)) throw err;
+}
 
 export async function incrementProviderUsage(provider: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
@@ -89,5 +121,115 @@ export interface ChatMessageRow {
   user_id: string;
   role: "user" | "assistant";
   content: string;
+  map_data_json: string | null;
   created_at: string;
+}
+
+export interface MapPointRow {
+  id: string;
+  user_id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  icon: string;
+  lat: number;
+  lon: number;
+  urls_json: string;
+  blurb: string;
+  source: string;
+  dedupe_key: string;
+  created_at: string;
+}
+
+export interface NewMapPoint {
+  name: string;
+  category?: string;
+  subcategory?: string;
+  icon?: string;
+  lat: number;
+  lon: number;
+  urls?: string[];
+  blurb?: string;
+  source?: string;
+}
+
+function dedupeKeyFor(name: string, lat: number, lon: number): string {
+  return `${lat.toFixed(4)}|${lon.toFixed(4)}|${name.trim().toLowerCase()}`;
+}
+
+export async function getMapPoints(userId: string): Promise<MapPointRow[]> {
+  const result = await db.execute({
+    sql: "SELECT * FROM map_points WHERE user_id = ? ORDER BY created_at ASC",
+    args: [userId],
+  });
+  return result.rows as unknown as MapPointRow[];
+}
+
+// A user-initiated add (manual pin or URL import) — overwrites an existing
+// point at the same dedupe key, since re-adding the same spot on purpose
+// means the user wants today's details to win.
+export async function createMapPoint(userId: string, point: NewMapPoint): Promise<MapPointRow> {
+  const id = randomUUID();
+  const dedupeKey = dedupeKeyFor(point.name, point.lat, point.lon);
+  await db.execute({
+    sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, dedupe_key)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, dedupe_key) DO UPDATE SET
+            name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
+            icon = excluded.icon, urls_json = excluded.urls_json, blurb = excluded.blurb, source = excluded.source`,
+    args: [
+      id,
+      userId,
+      point.name,
+      point.category ?? "",
+      point.subcategory ?? "",
+      point.icon ?? "📍",
+      point.lat,
+      point.lon,
+      JSON.stringify(point.urls ?? []),
+      point.blurb ?? "",
+      point.source ?? "manual",
+      dedupeKey,
+    ],
+  });
+  const result = await db.execute({
+    sql: "SELECT * FROM map_points WHERE user_id = ? AND dedupe_key = ?",
+    args: [userId, dedupeKey],
+  });
+  return result.rows[0] as unknown as MapPointRow;
+}
+
+// The assistant's own search results back themselves up here automatically —
+// silently skipping a spot that's already saved instead of overwriting it,
+// so it never clobbers a blurb the user edited by hand.
+export async function saveMapPointsFromSearch(userId: string, points: NewMapPoint[]): Promise<void> {
+  for (const point of points) {
+    await db.execute({
+      sql: `INSERT INTO map_points (id, user_id, name, category, subcategory, icon, lat, lon, urls_json, blurb, source, dedupe_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, dedupe_key) DO NOTHING`,
+      args: [
+        randomUUID(),
+        userId,
+        point.name,
+        point.category ?? "",
+        point.subcategory ?? "",
+        point.icon ?? "📍",
+        point.lat,
+        point.lon,
+        JSON.stringify(point.urls ?? []),
+        point.blurb ?? "",
+        point.source ?? "search",
+        dedupeKeyFor(point.name, point.lat, point.lon),
+      ],
+    });
+  }
+}
+
+export async function deleteMapPoint(userId: string, id: string): Promise<boolean> {
+  const result = await db.execute({
+    sql: "DELETE FROM map_points WHERE id = ? AND user_id = ?",
+    args: [id, userId],
+  });
+  return result.rowsAffected > 0;
 }

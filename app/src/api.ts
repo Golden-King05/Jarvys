@@ -30,13 +30,27 @@ export interface MapPoint {
   lat: number;
   lon: number;
   address?: string;
+  icon?: string;
+  category?: string;
+  subcategory?: string;
+  urls?: string[];
+  blurb?: string;
+}
+
+export type RegionType = "us_state" | "country";
+
+export interface RegionMapData {
+  name: string;
+  geometry: { type: string; coordinates: unknown };
 }
 
 export interface MapData {
-  kind: "places" | "distance";
+  kind: "places" | "distance" | "landmark" | "regions";
   points: MapPoint[];
   distanceMiles?: number;
   distanceKm?: number;
+  regionType?: RegionType;
+  regions?: RegionMapData[];
 }
 
 export interface ChatResponse {
@@ -55,7 +69,46 @@ export interface StoredMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  mapData: MapData | null;
 }
+
+// A saved pin — user-placed, imported from a URL, or auto-backed-up from
+// something the assistant found.
+export interface Point {
+  id: string;
+  name: string;
+  category: string;
+  subcategory: string;
+  icon: string;
+  lat: number;
+  lon: number;
+  urls: string[];
+  blurb: string;
+  source: string;
+  createdAt: string;
+}
+
+export interface NewPoint {
+  name: string;
+  category?: string;
+  subcategory?: string;
+  icon?: string;
+  lat: number;
+  lon: number;
+  urls?: string[];
+  blurb?: string;
+}
+
+export interface ImportPointFromUrl {
+  url: string;
+  lat?: number;
+  lon?: number;
+  category?: string;
+  subcategory?: string;
+  icon?: string;
+}
+
+export type ImportPointResult = { needsLocation: true; name: string } | { needsLocation: false; point: Point };
 
 async function request<T>(
   baseUrl: string,
@@ -117,4 +170,32 @@ export const api = {
       token,
       body: { audioBase64, mimeType },
     }),
+
+  getPoints: (baseUrl: string, token: string) => request<{ points: Point[] }>(baseUrl, "/points", { token }),
+
+  createPoint: (baseUrl: string, token: string, point: NewPoint) =>
+    request<Point>(baseUrl, "/points", { method: "POST", token, body: point }),
+
+  createPointFromUrl: async (
+    baseUrl: string,
+    token: string,
+    body: ImportPointFromUrl
+  ): Promise<ImportPointResult> => {
+    const res = await fetch(`${baseUrl}/points/from-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 422 && data.needsLocation) {
+      return { needsLocation: true, name: data.name as string };
+    }
+    if (!res.ok) {
+      throw new ApiError(data.error ?? `Request failed (${res.status})`);
+    }
+    return { needsLocation: false, point: data as Point };
+  },
+
+  deletePoint: (baseUrl: string, token: string, id: string) =>
+    request<{ ok: boolean }>(baseUrl, `/points/${id}`, { method: "DELETE", token }),
 };

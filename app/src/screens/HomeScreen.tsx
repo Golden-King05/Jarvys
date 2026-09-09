@@ -22,10 +22,12 @@ import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
 import RingChart from "../components/RingChart";
+import InlineMapCard from "../components/InlineMapCard";
 
 interface Message {
   from: "you" | "assistant" | "system";
   text: string;
+  mapData?: MapData | null;
 }
 
 interface UsageState {
@@ -95,7 +97,9 @@ export default function HomeScreen({ onMapData }: HomeScreenProps) {
     api
       .getMessages(baseUrl, token)
       .then(({ messages: stored }) => {
-        setMessages(stored.map((m) => ({ from: m.role === "user" ? "you" : "assistant", text: m.content })));
+        setMessages(
+          stored.map((m) => ({ from: m.role === "user" ? "you" : "assistant", text: m.content, mapData: m.mapData }))
+        );
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load conversation"))
       .finally(() => setLoadingHistory(false));
@@ -122,7 +126,7 @@ export default function HomeScreen({ onMapData }: HomeScreenProps) {
     if (result.provider) setLastProvider(result.provider);
     if (result.mapData) onMapData(result.mapData);
 
-    setMessages((prev) => [...prev, { from: "assistant", text: result.reply! }]);
+    setMessages((prev) => [...prev, { from: "assistant", text: result.reply!, mapData: result.mapData }]);
     if (!muted) speak(result.reply!);
 
     if (result.usage) {
@@ -312,13 +316,13 @@ export default function HomeScreen({ onMapData }: HomeScreenProps) {
           <Text style={styles.placeholder}>Say something to your assistant.</Text>
         ) : null}
         {messages.map((m, i) => (
-          <Text
-            key={i}
-            style={m.from === "you" ? styles.you : m.from === "system" ? styles.system : styles.assistant}
-          >
-            {m.from === "you" ? "You: " : ""}
-            {renderFormattedText(m.text)}
-          </Text>
+          <View key={i}>
+            <Text style={m.from === "you" ? styles.you : m.from === "system" ? styles.system : styles.assistant}>
+              {m.from === "you" ? "You: " : ""}
+              {renderFormattedText(m.text)}
+            </Text>
+            {m.mapData ? <InlineMapCard mapData={m.mapData} /> : null}
+          </View>
         ))}
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}
       </ScrollView>

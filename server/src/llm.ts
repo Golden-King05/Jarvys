@@ -1,5 +1,6 @@
-import { calculateDistance, findPlaces } from "./geo.js";
+import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import { getGeminiReply } from "./gemini.js";
+import { findRegions, type RegionType } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -51,15 +52,27 @@ export interface MapPoint {
   lat: number;
   lon: number;
   address?: string;
+  icon?: string;
+  category?: string;
+  subcategory?: string;
+  urls?: string[];
+  blurb?: string;
 }
 
-// Structured geo data from find_places/calculate_distance, for the Map
-// screen to plot — separate from the natural-language reply describing it.
+export interface RegionMapData {
+  name: string;
+  geometry: { type: string; coordinates: unknown };
+}
+
+// Structured geo data from the map tools, for the Map screen to plot —
+// separate from the natural-language reply describing it.
 export interface MapData {
-  kind: "places" | "distance";
+  kind: "places" | "distance" | "landmark" | "regions";
   points: MapPoint[];
   distanceMiles?: number;
   distanceKm?: number;
+  regionType?: RegionType;
+  regions?: RegionMapData[];
 }
 
 export interface ChatResult {
@@ -164,6 +177,27 @@ const CALCULATE_DISTANCE_TOOL = {
   },
 };
 
+const HIGHLIGHT_REGIONS_TOOL = {
+  type: "function",
+  function: {
+    name: "highlight_regions",
+    description:
+      "Shade a set of US states or countries on the user's map. You decide which regions match the question yourself (e.g. every US state where something is legal) — this tool only draws the ones you list, so pass every matching region's full common name, not an abbreviation. Use it whenever an answer is naturally a set of states or countries rather than a single place.",
+    parameters: {
+      type: "object",
+      properties: {
+        regionType: { type: "string", enum: ["us_state", "country"], description: "What kind of regions these are." },
+        names: {
+          type: "array",
+          items: { type: "string" },
+          description: "Full names of every matching region, e.g. [\"Ohio\", \"Michigan\"].",
+        },
+      },
+      required: ["regionType", "names"],
+    },
+  },
+};
+
 const DIFFICULTY_CLASSIFIER_PROMPT =
   'Classify whether the user message needs careful multi-step reasoning to answer correctly: a logic puzzle with many interacting constraints, a nontrivial proof, competition-level math, or writing/debugging real code. Everyday questions, conversation, simple facts, and simple arithmetic do NOT count. Reply with exactly "NO" if it does not need that, or "YES: <short reason, under 12 words>" if it does. Reply with nothing else.';
 
@@ -247,7 +281,25 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
     if (typeof args.query !== "string" || !args.query) {
       return { result: { error: "Missing required 'query' argument" }, mapData: null };
     }
-    return { result: await searchWikipedia(args.query), mapData: null };
+    const result = await searchWikipedia(args.query);
+    if ("error" in result || !result.coordinates) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.title,
+            lat: result.coordinates.lat,
+            lon: result.coordinates.lon,
+            icon: "📖",
+            category: "landmark",
+            urls: [result.url],
+            blurb: result.summary,
+          },
+        ],
+      },
+    };
   }
 
   if (name === "find_places") {
@@ -261,7 +313,14 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
       result,
       mapData: {
         kind: "places",
-        points: result.places.map((p) => ({ label: p.name, lat: p.lat, lon: p.lon, address: p.address })),
+        points: result.places.map((p) => ({
+          label: p.name,
+          lat: p.lat,
+          lon: p.lon,
+          address: p.address,
+          icon: categoryIcon(result.category),
+          category: result.category,
+        })),
       },
     };
   }
@@ -282,6 +341,27 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
         ],
         distanceMiles: result.distanceMiles,
         distanceKm: result.distanceKm,
+      },
+    };
+  }
+
+  if (name === "highlight_regions") {
+    const regionType = args.regionType;
+    if (regionType !== "us_state" && regionType !== "country") {
+      return { result: { error: "regionType must be 'us_state' or 'country'" }, mapData: null };
+    }
+    if (!Array.isArray(args.names) || args.names.some((n) => typeof n !== "string")) {
+      return { result: { error: "Missing required 'names' array" }, mapData: null };
+    }
+    const matches = findRegions(regionType, args.names as string[]);
+    if ("error" in matches) return { result: matches, mapData: null };
+    return {
+      result: { matched: matches.map((m) => m.name) },
+      mapData: {
+        kind: "regions",
+        points: [],
+        regionType,
+        regions: matches,
       },
     };
   }
@@ -329,6 +409,8 @@ export async function getAssistantReply(params: {
     "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
     "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map, so mention that naturally.",
+    "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
+    "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -405,7 +487,7 @@ export async function getAssistantReply(params: {
       { role: "user", content: params.message },
     ];
 
-    const tools = [SEARCH_WIKIPEDIA_TOOL, FIND_PLACES_TOOL, CALCULATE_DISTANCE_TOOL];
+    const tools = [SEARCH_WIKIPEDIA_TOOL, FIND_PLACES_TOOL, CALCULATE_DISTANCE_TOOL, HIGHLIGHT_REGIONS_TOOL];
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       const res = await fetch(GROQ_API_URL, {

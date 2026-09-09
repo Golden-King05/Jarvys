@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { db, type AssistantSettingsRow, type ChatMessageRow } from "../db.js";
-import { getAssistantReply, transcribeAudio } from "../llm.js";
+import { db, saveMapPointsFromSearch, type AssistantSettingsRow, type ChatMessageRow } from "../db.js";
+import { getAssistantReply, transcribeAudio, type MapData } from "../llm.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 
 // How much of the account's stored chat log to load per request. This bounds
@@ -42,11 +42,38 @@ async function getChatHistory(userId: string): Promise<ChatMessageRow[]> {
   return result.rows as unknown as ChatMessageRow[];
 }
 
-async function saveChatMessage(userId: string, role: "user" | "assistant", content: string) {
+async function saveChatMessage(
+  userId: string,
+  role: "user" | "assistant",
+  content: string,
+  mapData?: MapData | null
+) {
   await db.execute({
-    sql: "INSERT INTO chat_messages (id, user_id, role, content) VALUES (?, ?, ?, ?)",
-    args: [randomUUID(), userId, role, content],
+    sql: "INSERT INTO chat_messages (id, user_id, role, content, map_data_json) VALUES (?, ?, ?, ?, ?)",
+    args: [randomUUID(), userId, role, content, mapData ? JSON.stringify(mapData) : null],
   });
+}
+
+// The assistant's own place/landmark searches double as a growing personal
+// map — every result gets backed up as a point instead of vanishing once
+// the chat scrolls past it. Distance/region lookups aren't real POIs, so
+// those are left out.
+async function backupMapData(userId: string, mapData: MapData | null) {
+  if (!mapData || (mapData.kind !== "places" && mapData.kind !== "landmark")) return;
+  await saveMapPointsFromSearch(
+    userId,
+    mapData.points.map((p) => ({
+      name: p.label,
+      category: p.category ?? "",
+      subcategory: p.subcategory ?? "",
+      icon: p.icon ?? "📍",
+      lat: p.lat,
+      lon: p.lon,
+      urls: p.urls,
+      blurb: p.blurb ?? p.address ?? "",
+      source: mapData.kind === "landmark" ? "wikipedia" : "search",
+    }))
+  );
 }
 
 // GET the signed-in account's assistant settings. Any device that logs into
@@ -101,7 +128,12 @@ assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
 assistantRouter.get("/messages", async (req: AuthedRequest, res) => {
   const rows = await getChatHistory(req.userId!);
   res.json({
-    messages: rows.map((r) => ({ role: r.role, content: r.content, createdAt: r.created_at })),
+    messages: rows.map((r) => ({
+      role: r.role,
+      content: r.content,
+      createdAt: r.created_at,
+      mapData: r.map_data_json ? JSON.parse(r.map_data_json) : null,
+    })),
   });
 });
 
@@ -134,7 +166,8 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
     // picks yes/no, and that follow-up call is what actually gets saved.
     if (!result.thinkingRequest) {
       await saveChatMessage(req.userId!, "user", parsed.data.message);
-      await saveChatMessage(req.userId!, "assistant", result.reply!);
+      await saveChatMessage(req.userId!, "assistant", result.reply!, result.mapData);
+      await backupMapData(req.userId!, result.mapData);
     }
 
     res.json(result);

@@ -81,6 +81,19 @@ function mapCategory(raw: string): string {
   return "restaurant";
 }
 
+export function categoryIcon(tag: string): string {
+  switch (tag) {
+    case "cafe":
+      return "☕";
+    case "bar":
+      return "🍺";
+    case "fast_food":
+      return "🍔";
+    default:
+      return "🍽️";
+  }
+}
+
 export interface PlaceResult {
   name: string;
   lat: number;

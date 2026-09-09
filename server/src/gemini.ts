@@ -1,6 +1,7 @@
 import { incrementProviderUsage } from "./db.js";
-import { calculateDistance, findPlaces } from "./geo.js";
+import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
+import { findRegions } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -61,6 +62,27 @@ const SEARCH_WIKIPEDIA_TOOL = {
         required: ["from", "to"],
       },
     },
+    {
+      name: "highlight_regions",
+      description:
+        "Shade a set of US states or countries on the user's map. You decide which regions match the question yourself (e.g. every US state where something is legal) — this tool only draws the ones you list, so pass every matching region's full common name, not an abbreviation. Use it whenever an answer is naturally a set of states or countries rather than a single place.",
+      parameters: {
+        type: "object",
+        properties: {
+          regionType: {
+            type: "string",
+            enum: ["us_state", "country"],
+            description: "What kind of regions these are.",
+          },
+          names: {
+            type: "array",
+            items: { type: "string" },
+            description: 'Full names of every matching region, e.g. ["Ohio", "Michigan"].',
+          },
+        },
+        required: ["regionType", "names"],
+      },
+    },
   ],
 };
 
@@ -99,7 +121,25 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
     if (typeof query !== "string" || !query) {
       return { result: { error: "Missing required 'query' argument" }, mapData: null };
     }
-    return { result: await searchWikipedia(query), mapData: null };
+    const result = await searchWikipedia(query);
+    if ("error" in result || !result.coordinates) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.title,
+            lat: result.coordinates.lat,
+            lon: result.coordinates.lon,
+            icon: "📖",
+            category: "landmark",
+            urls: [result.url],
+            blurb: result.summary,
+          },
+        ],
+      },
+    };
   }
 
   if (call.name === "find_places") {
@@ -114,7 +154,14 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
       result,
       mapData: {
         kind: "places",
-        points: result.places.map((p) => ({ label: p.name, lat: p.lat, lon: p.lon, address: p.address })),
+        points: result.places.map((p) => ({
+          label: p.name,
+          lat: p.lat,
+          lon: p.lon,
+          address: p.address,
+          icon: categoryIcon(result.category),
+          category: result.category,
+        })),
       },
     };
   }
@@ -138,6 +185,23 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
         distanceMiles: result.distanceMiles,
         distanceKm: result.distanceKm,
       },
+    };
+  }
+
+  if (call.name === "highlight_regions") {
+    const regionType = args.regionType;
+    const names = args.names;
+    if (regionType !== "us_state" && regionType !== "country") {
+      return { result: { error: "regionType must be 'us_state' or 'country'" }, mapData: null };
+    }
+    if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) {
+      return { result: { error: "Missing required 'names' array" }, mapData: null };
+    }
+    const matches = findRegions(regionType, names as string[]);
+    if ("error" in matches) return { result: matches, mapData: null };
+    return {
+      result: { matched: matches.map((m) => m.name) },
+      mapData: { kind: "regions", points: [], regionType, regions: matches },
     };
   }
 

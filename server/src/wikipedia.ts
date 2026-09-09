@@ -13,12 +13,36 @@ interface WikiSummaryResponse {
   title: string;
   extract: string;
   content_urls?: { desktop?: { page?: string } };
+  coordinates?: { lat: number; lon: number };
 }
 
 export interface WikipediaResult {
   title: string;
   summary: string;
   url: string;
+  // Only set for geotagged articles (places, landmarks) — lets a factual
+  // lookup like "the oldest building still standing in NYC" drop a real pin
+  // instead of just answering in text.
+  coordinates?: { lat: number; lon: number };
+}
+
+async function fetchSummary(title: string): Promise<WikipediaResult | { error: string }> {
+  const summaryRes = await fetch(`${WIKI_SUMMARY_URL}${encodeURIComponent(title)}`, {
+    headers: { "User-Agent": USER_AGENT },
+  });
+  if (!summaryRes.ok) {
+    return { error: `Could not load the Wikipedia summary for "${title}" (${summaryRes.status})` };
+  }
+  const summaryData = (await summaryRes.json()) as WikiSummaryResponse;
+
+  return {
+    title: summaryData.title,
+    summary: summaryData.extract,
+    url:
+      summaryData.content_urls?.desktop?.page ??
+      `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`,
+    ...(summaryData.coordinates ? { coordinates: summaryData.coordinates } : {}),
+  };
 }
 
 export async function searchWikipedia(query: string): Promise<WikipediaResult | { error: string }> {
@@ -42,19 +66,22 @@ export async function searchWikipedia(query: string): Promise<WikipediaResult | 
     return { error: `No Wikipedia article found for "${query}"` };
   }
 
-  const summaryRes = await fetch(`${WIKI_SUMMARY_URL}${encodeURIComponent(topTitle)}`, {
-    headers: { "User-Agent": USER_AGENT },
-  });
-  if (!summaryRes.ok) {
-    return { error: `Could not load the Wikipedia summary for "${topTitle}" (${summaryRes.status})` };
-  }
-  const summaryData = (await summaryRes.json()) as WikiSummaryResponse;
+  return fetchSummary(topTitle);
+}
 
-  return {
-    title: summaryData.title,
-    summary: summaryData.extract,
-    url:
-      summaryData.content_urls?.desktop?.page ??
-      `https://en.wikipedia.org/wiki/${encodeURIComponent(topTitle)}`,
-  };
+// For URL imports — pulls the article title straight out of a
+// wikipedia.org/wiki/<title> URL rather than re-searching for it.
+export function wikipediaTitleFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)wikipedia\.org$/.test(parsed.hostname)) return null;
+    const match = parsed.pathname.match(/^\/wiki\/(.+)$/);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getWikipediaByTitle(title: string): Promise<WikipediaResult | { error: string }> {
+  return fetchSummary(title);
 }

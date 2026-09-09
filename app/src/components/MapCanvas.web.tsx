@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import type { MapPoint } from "../api";
+import type { MapPoint, RegionMapData } from "../api";
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -37,15 +37,37 @@ function loadLeaflet(): Promise<Leaflet> {
 interface MapCanvasProps {
   points: MapPoint[];
   showLine?: boolean;
+  regions?: RegionMapData[];
   initialRegion?: { latitude: number; longitude: number };
+  onMapPress?: (lat: number, lon: number) => void;
+  onPointPress?: (point: MapPoint) => void;
+  pendingMarker?: { lat: number; lon: number } | null;
 }
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
 
-export default function MapCanvas({ points, showLine, initialRegion }: MapCanvasProps) {
+function emojiIcon(L: Leaflet, icon: string) {
+  return L.divIcon({
+    html: `<div style="font-size:22px;line-height:1;transform:translate(-50%,-50%)">${icon}</div>`,
+    className: "",
+    iconSize: [0, 0],
+  });
+}
+
+export default function MapCanvas({
+  points,
+  showLine,
+  regions,
+  initialRegion,
+  onMapPress,
+  onPointPress,
+  pendingMarker,
+}: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
   const layerGroup = useRef<Leaflet>(null);
+  const onMapPressRef = useRef(onMapPress);
+  onMapPressRef.current = onMapPress;
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +78,9 @@ export default function MapCanvas({ points, showLine, initialRegion }: MapCanvas
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(map);
+      map.on("click", (e: { latlng: { lat: number; lng: number } }) => {
+        onMapPressRef.current?.(e.latlng.lat, e.latlng.lng);
+      });
       mapInstance.current = map;
       layerGroup.current = L.layerGroup().addTo(map);
       setTimeout(() => map.invalidateSize(), 0);
@@ -74,13 +99,27 @@ export default function MapCanvas({ points, showLine, initialRegion }: MapCanvas
       const layer = layerGroup.current;
       if (!map || !layer) return;
       layer.clearLayers();
-      if (points.length === 0) return;
+
+      if (regions && regions.length > 0) {
+        L.geoJSON(
+          {
+            type: "FeatureCollection",
+            features: regions.map((r) => ({ type: "Feature", properties: { name: r.name }, geometry: r.geometry })),
+          },
+          { style: { color: "#2980b9", weight: 2, fillColor: "#2980b9", fillOpacity: 0.25 } }
+        ).addTo(layer);
+      }
 
       points.forEach((p: MapPoint) => {
-        L.marker([p.lat, p.lon])
+        L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "📍") })
           .addTo(layer)
-          .bindPopup(p.address ? `${p.label}<br>${p.address}` : p.label);
+          .bindPopup(p.address ? `${p.label}<br>${p.address}` : p.label)
+          .on("click", () => onPointPress?.(p));
       });
+
+      if (pendingMarker) {
+        L.marker([pendingMarker.lat, pendingMarker.lon], { icon: emojiIcon(L, "📌") }).addTo(layer);
+      }
 
       if (showLine && points.length === 2) {
         L.polyline(
@@ -89,14 +128,18 @@ export default function MapCanvas({ points, showLine, initialRegion }: MapCanvas
         ).addTo(layer);
       }
 
-      if (points.length === 1) {
-        map.setView([points[0].lat, points[0].lon], 13);
-      } else {
-        const bounds = L.latLngBounds(points.map((p: MapPoint) => [p.lat, p.lon]));
+      const allPins = pendingMarker ? [...points, { lat: pendingMarker.lat, lon: pendingMarker.lon }] : points;
+      if (allPins.length === 1) {
+        map.setView([allPins[0].lat, allPins[0].lon], 13);
+      } else if (allPins.length > 1) {
+        const bounds = L.latLngBounds(allPins.map((p) => [p.lat, p.lon]));
         map.fitBounds(bounds, { padding: [60, 60] });
+      } else if (regions && regions.length > 0) {
+        const layerBounds = layer.getBounds?.();
+        if (layerBounds?.isValid?.()) map.fitBounds(layerBounds, { padding: [40, 40] });
       }
     });
-  }, [points, showLine]);
+  }, [points, showLine, regions, pendingMarker, onPointPress]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }
