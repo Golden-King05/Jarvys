@@ -1,9 +1,8 @@
-const GOOGLE_SEARCH_URL = "https://www.googleapis.com/customsearch/v1";
+const TAVILY_SEARCH_URL = "https://api.tavily.com/search";
 
 // Kept small — each result becomes part of the tool response fed back into
 // the model's context, and this session has already hit a real Groq
 // per-minute token cap once from underestimated per-request overhead.
-// Also Google Custom Search caps a single request at 10 results anyway.
 const MAX_RESULTS = 5;
 
 export interface WebSearchResult {
@@ -12,47 +11,43 @@ export interface WebSearchResult {
   snippet: string;
 }
 
-interface GoogleSearchResponse {
-  items?: { title: string; link: string; snippet?: string }[];
+interface TavilySearchResponse {
+  results?: { title: string; url: string; content?: string }[];
 }
 
 // General web search, for real-world places, businesses, or topics that
 // don't have a Wikipedia article — complements search_wikipedia rather than
-// replacing it. Requires a free Google Programmable Search Engine (100
-// queries/day free) since — unlike Wikipedia/OSM/weather — there's no good
-// keyless option for general web search. Needs TWO values: an API key
-// (Google Cloud Console → enable "Custom Search API" → Credentials) and a
-// search engine ID (programmablesearchengine.google.com → create one with
-// "Search the entire web" turned on → its "Search engine ID").
+// replacing it. Requires a free Tavily API key (1,000 searches/month free,
+// no card required) since — unlike Wikipedia/OSM/weather — there's no good
+// keyless option for general web search. Chosen over Google Programmable
+// Search Engine specifically to skip its "Search the entire web" setup step
+// (a real, reported UI-toggle bug on that product) — Tavily searches the
+// whole web by default with nothing to configure beyond the key itself.
 export async function searchWeb(query: string): Promise<WebSearchResult[] | { error: string }> {
-  const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-  const searchEngineId = process.env.GOOGLE_SEARCH_CX;
-  if (!apiKey || !searchEngineId) {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) {
     return {
       error:
-        "Web search needs a free Google Programmable Search Engine configured as GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX on the server. Set one up at https://programmablesearchengine.google.com (turn on \"Search the entire web\") and https://console.cloud.google.com (enable the Custom Search API for a key).",
+        "Web search needs a free Tavily API key configured as TAVILY_API_KEY on the server. Get one at https://tavily.com.",
     };
   }
 
-  const params = new URLSearchParams({
-    key: apiKey,
-    cx: searchEngineId,
-    q: query,
-    num: String(MAX_RESULTS),
-  });
   try {
-    const res = await fetch(`${GOOGLE_SEARCH_URL}?${params}`, {
+    const res = await fetch(TAVILY_SEARCH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: apiKey, query, max_results: MAX_RESULTS }),
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) {
       return { error: `Web search failed (${res.status})` };
     }
-    const data = (await res.json()) as GoogleSearchResponse;
-    const items = data.items ?? [];
-    return items.slice(0, MAX_RESULTS).map((item) => ({
-      title: item.title,
-      url: item.link,
-      snippet: item.snippet ?? "",
+    const data = (await res.json()) as TavilySearchResponse;
+    const results = data.results ?? [];
+    return results.slice(0, MAX_RESULTS).map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: r.content ?? "",
     }));
   } catch (err) {
     return { error: `Web search failed: ${err instanceof Error ? err.message : "network error"}` };
