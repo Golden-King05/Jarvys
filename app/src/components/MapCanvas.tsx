@@ -102,7 +102,16 @@ export default function MapCanvas({
       }
       onPress={(e) => onMapPress?.(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
     >
-      {radarTemplate ? <UrlTile urlTemplate={radarTemplate} zIndex={1} /> : null}
+      {radarTemplate ? (
+        // RainViewer's radar tiles only actually exist up to zoom 7 — past
+        // that it serves a "Zoom Level Not Supported" placeholder image
+        // instead of a 404, which without this shows up as literal text on
+        // the map and a ragged patchwork where some tiles load and others
+        // don't. maximumNativeZ tells the map to stop asking past zoom 7
+        // and upscale that tile instead (blurrier, but no placeholder text
+        // or clipping).
+        <UrlTile urlTemplate={radarTemplate} zIndex={1} maximumNativeZ={7} />
+      ) : null}
 
       {showTimezoneBands
         ? getTimezoneBands().map((band) => (

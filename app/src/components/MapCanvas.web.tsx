@@ -180,7 +180,13 @@ export default function MapCanvas({
         if (!radarLayerRef.current) {
           const template = await getRadarTileTemplate();
           if (cancelled || !template || !map) return;
-          radarLayerRef.current = L.tileLayer(template, { opacity: 0.6 }).addTo(map);
+          // RainViewer's radar tiles only actually exist up to zoom 7 —
+          // past that it serves a "Zoom Level Not Supported" placeholder
+          // image instead of a 404, which without maxNativeZoom shows up as
+          // literal text on the map and a ragged patchwork where some tiles
+          // load and others don't. This tells Leaflet to stop requesting
+          // past zoom 7 and upscale that tile instead.
+          radarLayerRef.current = L.tileLayer(template, { opacity: 0.6, maxNativeZoom: 7 }).addTo(map);
         }
       } else if (radarLayerRef.current) {
         map.removeLayer(radarLayerRef.current);
