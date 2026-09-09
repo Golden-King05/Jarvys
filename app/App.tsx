@@ -21,6 +21,7 @@ type Tab = "chat" | "map" | "settings";
 function AuthedApp() {
   const [tab, setTab] = useState<Tab>("chat");
   const [mapData, setMapData] = useState<MapData | null>(null);
+  const [verifySignal, setVerifySignal] = useState(0);
 
   return (
     <View style={styles.flex}>
@@ -39,9 +40,17 @@ function AuthedApp() {
       </View>
       <View style={styles.flex}>
         <View style={[styles.flex, tab !== "chat" && styles.hidden]}>
-          <HomeScreen onMapData={setMapData} />
+          <HomeScreen onMapData={setMapData} verifySignal={verifySignal} />
         </View>
-        {tab === "map" ? <MapScreen mapData={mapData} /> : null}
+        {tab === "map" ? (
+          <MapScreen
+            mapData={mapData}
+            onVerifyMap={() => {
+              setTab("chat");
+              setVerifySignal((n) => n + 1);
+            }}
+          />
+        ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}
       </View>
     </View>

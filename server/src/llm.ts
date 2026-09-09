@@ -1,5 +1,5 @@
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
-import { getGeminiReply } from "./gemini.js";
+import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
@@ -78,6 +78,10 @@ export interface MapData {
   distanceKm?: number;
   regionType?: RegionType;
   regions?: RegionMapData[];
+  // Set when verify_map produced this map — every region was individually
+  // classified rather than only the ones the reply's prose happened to
+  // mention, so the client can badge it as the more trustworthy version.
+  verified?: boolean;
 }
 
 export interface ChatResult {
@@ -199,6 +203,23 @@ const HIGHLIGHT_REGIONS_TOOL = {
         },
       },
       required: ["regionType", "names"],
+    },
+  },
+};
+
+const VERIFY_MAP_TOOL = {
+  type: "function",
+  function: {
+    name: "verify_map",
+    description:
+      "Go through every US state or country one at a time and double-check its status on a topic already discussed, instead of relying on a quick first-pass answer. Call this when the user asks to verify, double-check, reload, or fill in the map more exactly or completely. Infer the topic and regionType from the conversation so far.",
+    parameters: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "The specific topic being checked, e.g. 'owning a raccoon as a pet'." },
+        regionType: { type: "string", enum: ["us_state", "country"], description: "Which kind of regions to check." },
+      },
+      required: ["topic", "regionType"],
     },
   },
 };
@@ -377,6 +398,19 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
     };
   }
 
+  if (name === "verify_map") {
+    if (typeof args.topic !== "string" || !args.topic) {
+      return { result: { error: "Missing required 'topic' argument" }, mapData: null };
+    }
+    const regionType = args.regionType;
+    if (regionType !== "us_state" && regionType !== "country") {
+      return { result: { error: "regionType must be 'us_state' or 'country'" }, mapData: null };
+    }
+    const verified = await verifyRegionStatuses(args.topic, regionType);
+    if ("error" in verified) return { result: verified, mapData: null };
+    return { result: { verified: true }, mapData: verified.mapData };
+  }
+
   return { result: { error: `Unknown tool: ${name}` }, mapData: null };
 }
 
@@ -422,6 +456,7 @@ export async function getAssistantReply(params: {
     "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map, so mention that naturally.",
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
+    "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -498,7 +533,13 @@ export async function getAssistantReply(params: {
       { role: "user", content: params.message },
     ];
 
-    const tools = [SEARCH_WIKIPEDIA_TOOL, FIND_PLACES_TOOL, CALCULATE_DISTANCE_TOOL, HIGHLIGHT_REGIONS_TOOL];
+    const tools = [
+      SEARCH_WIKIPEDIA_TOOL,
+      FIND_PLACES_TOOL,
+      CALCULATE_DISTANCE_TOOL,
+      HIGHLIGHT_REGIONS_TOOL,
+      VERIFY_MAP_TOOL,
+    ];
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       const res = await fetch(GROQ_API_URL, {

@@ -67,9 +67,10 @@ function renderFormattedText(text: string) {
 
 interface HomeScreenProps {
   onMapData: (data: MapData) => void;
+  verifySignal?: number;
 }
 
-export default function HomeScreen({ onMapData }: HomeScreenProps) {
+export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps) {
   const { baseUrl, token } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -161,6 +162,14 @@ export default function HomeScreen({ onMapData }: HomeScreenProps) {
       setError(e instanceof Error ? e.message : "Failed to send message");
     }
   }
+
+  // Lets the Map screen's "Verify Map" button trigger the same request a
+  // typed or spoken "verify the map" would — it's just a counter that ticks
+  // up, so every press (even a repeat) reliably fires this effect.
+  useEffect(() => {
+    if (verifySignal) sendMessage("Verify the map");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifySignal]);
 
   async function resolveThinking(choice: "default" | "none") {
     if (!pendingThinking) return;
@@ -321,7 +330,9 @@ export default function HomeScreen({ onMapData }: HomeScreenProps) {
               {m.from === "you" ? "You: " : ""}
               {renderFormattedText(m.text)}
             </Text>
-            {m.mapData ? <InlineMapCard mapData={m.mapData} /> : null}
+            {m.mapData ? (
+              <InlineMapCard mapData={m.mapData} onVerifyMap={() => sendMessage("Verify the map")} />
+            ) : null}
           </View>
         ))}
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}

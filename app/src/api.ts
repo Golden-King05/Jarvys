@@ -53,6 +53,7 @@ export interface MapData {
   distanceKm?: number;
   regionType?: RegionType;
   regions?: RegionMapData[];
+  verified?: boolean;
 }
 
 export interface ChatResponse {

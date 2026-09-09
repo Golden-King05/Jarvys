@@ -19,6 +19,7 @@ import { fonts } from "../theme";
 
 interface MapScreenProps {
   mapData: MapData | null;
+  onVerifyMap: () => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awaiting-tap";
@@ -36,7 +37,7 @@ function toMapPoint(p: Point): MapPoint {
   };
 }
 
-export default function MapScreen({ mapData }: MapScreenProps) {
+export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
   const [points, setPoints] = useState<Point[]>([]);
@@ -246,6 +247,16 @@ export default function MapScreen({ mapData }: MapScreenProps) {
 
       {hasStatusLegend ? <RegionLegend /> : null}
 
+      {mapData?.kind === "regions" ? (
+        mapData.verified ? (
+          <Text style={styles.verifiedLabel}>✓ Verified state-by-state</Text>
+        ) : (
+          <TouchableOpacity style={styles.verifyButton} onPress={onVerifyMap}>
+            <Text style={styles.verifyButtonText}>Verify Map</Text>
+          </TouchableOpacity>
+        )
+      ) : null}
+
       {mapData && mapData.kind === "distance" && mapData.distanceMiles != null ? (
         <View style={styles.infoBox}>
           <Text style={styles.infoTitle}>
@@ -448,6 +459,15 @@ const styles = StyleSheet.create({
   tapBannerText: { fontFamily: fonts.medium, fontSize: 13, color: "#222" },
   tapBannerCancel: { fontFamily: fonts.medium, fontSize: 13, color: "#c0392b" },
   infoBox: { padding: 12, borderTopWidth: 1, borderTopColor: "#eee" },
+  verifyButton: { alignSelf: "center", paddingVertical: 8 },
+  verifyButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
+  verifiedLabel: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    color: "#27ae60",
+    textAlign: "center",
+    paddingVertical: 8,
+  },
   infoTitle: { fontFamily: fonts.semiBold, fontSize: 14, color: "#222" },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center" },
   card: { backgroundColor: "#fff", borderRadius: 16, padding: 20, width: 320, maxWidth: "90%", maxHeight: "80%" },

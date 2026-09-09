@@ -1,7 +1,7 @@
 import { incrementProviderUsage } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
-import { extractRegionsFromText, findRegions } from "./regions.js";
+import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -83,6 +83,26 @@ const SEARCH_WIKIPEDIA_TOOL = {
         required: ["regionType", "names"],
       },
     },
+    {
+      name: "verify_map",
+      description:
+        "Go through every US state or country one at a time and double-check its status on a topic already discussed, instead of relying on a quick first-pass answer. Call this when the user asks to verify, double-check, reload, or fill in the map more exactly or completely. Infer the topic and regionType from the conversation so far.",
+      parameters: {
+        type: "object",
+        properties: {
+          topic: {
+            type: "string",
+            description: "The specific topic being checked, e.g. 'owning a raccoon as a pet'.",
+          },
+          regionType: {
+            type: "string",
+            enum: ["us_state", "country"],
+            description: "Which kind of regions to check.",
+          },
+        },
+        required: ["topic", "regionType"],
+      },
+    },
   ],
 };
 
@@ -111,6 +131,88 @@ interface GeminiResponse {
     candidatesTokenCount?: number;
     totalTokenCount?: number;
   };
+}
+
+function extractJsonObject(text: string): string {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  return fenced ? fenced[1] : text;
+}
+
+// The heuristic text-scan (extractRegionsFromText) is a best-effort guess
+// from prose, and it only knows about the states/countries the reply
+// happened to mention — everything else defaults to red. This is the
+// deliberate, exhaustive alternative: a dedicated call that goes state by
+// state (or country by country) and classifies every single one, always on
+// Gemini regardless of which provider is answering normally, since the
+// output is comfortably bigger than Groq's free-tier reply ceiling allows.
+export async function verifyRegionStatuses(
+  topic: string,
+  regionType: RegionType
+): Promise<{ mapData: MapData } | { error: string }> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      error:
+        "A full state-by-state check needs a free Gemini API key configured as GEMINI_API_KEY on the server.",
+    };
+  }
+
+  const allRegions = getAllRegions(regionType);
+  const label = regionType === "us_state" ? "US state (plus DC and Puerto Rico)" : "country";
+  const prompt = [
+    `Topic: "${topic}"`,
+    `For every ${label} listed below, decide its status regarding this topic:`,
+    '"green" if it is fully allowed/legal, "yellow" if it is allowed only with a permit, license, registration, or other restriction, or "red" if it is not allowed, illegal, or the topic does not apply there.',
+    `Regions: ${allRegions.map((r) => r.name).join(", ")}`,
+    'Respond with ONLY a JSON object mapping each region\'s exact name to "green", "yellow", or "red". Include every region listed. No other text.',
+  ].join("\n\n");
+
+  const res = await fetch(`${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { thinkingLevel: "low" },
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    return { error: `Verification request failed (${res.status}): ${detail}` };
+  }
+
+  const data = (await res.json()) as GeminiResponse;
+  const text = data.candidates?.[0]?.content?.parts?.find((p) => typeof p.text === "string")?.text;
+  if (!text) {
+    return { error: "Gemini didn't return a usable verification result." };
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(extractJsonObject(text));
+  } catch {
+    return { error: "Couldn't parse the verification result." };
+  }
+
+  const normalized = new Map<string, unknown>();
+  for (const [name, status] of Object.entries(parsed)) {
+    normalized.set(name.toLowerCase(), status);
+  }
+
+  const regions: MapData["regions"] = allRegions.map((r) => {
+    const status = normalized.get(r.name.toLowerCase());
+    return {
+      name: r.name,
+      geometry: r.geometry,
+      status: status === "green" || status === "yellow" || status === "red" ? status : "red",
+    };
+  });
+
+  return { mapData: { kind: "regions", points: [], regionType, regions, verified: true } };
 }
 
 async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown; mapData: MapData | null }> {
@@ -203,6 +305,20 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
       result: { matched: matches.map((m) => m.name) },
       mapData: { kind: "regions", points: [], regionType, regions: matches },
     };
+  }
+
+  if (call.name === "verify_map") {
+    const topic = args.topic;
+    const regionType = args.regionType;
+    if (typeof topic !== "string" || !topic) {
+      return { result: { error: "Missing required 'topic' argument" }, mapData: null };
+    }
+    if (regionType !== "us_state" && regionType !== "country") {
+      return { result: { error: "regionType must be 'us_state' or 'country'" }, mapData: null };
+    }
+    const verified = await verifyRegionStatuses(topic, regionType);
+    if ("error" in verified) return { result: verified, mapData: null };
+    return { result: { verified: true }, mapData: verified.mapData };
   }
 
   return { result: { error: `Unknown tool: ${call.name}` }, mapData: null };

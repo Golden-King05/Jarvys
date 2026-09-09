@@ -9,12 +9,13 @@ import { fonts } from "../theme";
 
 interface InlineMapCardProps {
   mapData: MapData;
+  onVerifyMap?: () => void;
 }
 
 // The map "insert" that shows up under an assistant reply when a tool
 // plotted something — collapsible so a long chat doesn't turn into a wall
 // of little maps.
-export default function InlineMapCard({ mapData }: InlineMapCardProps) {
+export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
@@ -57,6 +58,15 @@ export default function InlineMapCard({ mapData }: InlineMapCardProps) {
               onRegionPress={setSelectedRegion}
             />
           </View>
+          {mapData.kind === "regions" && onVerifyMap ? (
+            mapData.verified ? (
+              <Text style={styles.verifiedLabel}>✓ Verified state-by-state</Text>
+            ) : (
+              <TouchableOpacity style={styles.verifyButton} onPress={onVerifyMap}>
+                <Text style={styles.verifyButtonText}>Verify Map</Text>
+              </TouchableOpacity>
+            )
+          ) : null}
         </>
       ) : null}
       <PointDetailModal point={selectedPoint} onClose={() => setSelectedPoint(null)} />
@@ -77,4 +87,13 @@ const styles = StyleSheet.create({
   summary: { fontFamily: fonts.medium, fontSize: 12, color: "#333", flex: 1, marginRight: 8 },
   toggle: { fontFamily: fonts.medium, fontSize: 11, color: "#2980b9" },
   mapBox: { height: 160 },
+  verifyButton: { alignSelf: "center", paddingVertical: 8 },
+  verifyButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#2980b9" },
+  verifiedLabel: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    color: "#27ae60",
+    textAlign: "center",
+    paddingVertical: 8,
+  },
 });
