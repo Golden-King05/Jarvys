@@ -1,9 +1,10 @@
 import { convertCurrency } from "./currency.js";
-import { calculateDistance, categoryIcon, findPlaces, geocode } from "./geo.js";
+import { findMapPointsByName } from "./db.js";
+import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
-import { searchWikipedia } from "./wikipedia.js";
+import { findArticlesInArea, searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 // openai/gpt-oss-120b was the earlier default but has a documented issue
@@ -302,6 +303,39 @@ const PROPOSE_MAP_POINT_TOOL = {
   },
 };
 
+const FIND_SAVED_POINT_TOOL = {
+  type: "function",
+  function: {
+    name: "find_saved_point",
+    description:
+      "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. Returns up to 5 matches, or an empty list if nothing matches.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The place name to look for among the user's saved points." },
+      },
+      required: ["query"],
+    },
+  },
+};
+
+const FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL = {
+  type: "function",
+  function: {
+    name: "find_wikipedia_articles_in_area",
+    description:
+      "Find Wikipedia articles located within a geographic area (a county, city, park, etc.) and preview them all as points on the user's map, the same way propose_map_point previews one. Wikipedia's search only reaches about 10km around each point, so a large area is covered by tiling several searches — a very large area (e.g. a whole state) may only be partially covered, which the tool result flags. Use this when the user asks to find, locate, or list Wikipedia articles or landmarks across an area, not for a single specific place.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "The area to search, e.g. 'Steuben County, Indiana'." },
+        limit: { type: "number", description: "Max number of articles to return (default 20, max 40)." },
+      },
+      required: ["location"],
+    },
+  },
+};
+
 const DIFFICULTY_CLASSIFIER_PROMPT =
   'Classify whether the user message needs careful multi-step reasoning to answer correctly: a logic puzzle with many interacting constraints, a nontrivial proof, competition-level math, or writing/debugging real code. Everyday questions, conversation, simple facts, and simple arithmetic do NOT count. Reply with exactly "NO" if it does not need that, or "YES: <short reason, under 12 words>" if it does. Reply with nothing else.';
 
@@ -378,7 +412,7 @@ function regionsFromReply(reply: string): MapData | null {
   return { kind: "regions", points: [], regionType: found.regionType, regions: found.regions };
 }
 
-async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: MapData | null }> {
+async function executeTool(call: ToolCall, userId: string): Promise<{ result: unknown; mapData: MapData | null }> {
   const name = call.function.name;
   let args: Record<string, unknown>;
   try {
@@ -576,6 +610,56 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
     };
   }
 
+  if (name === "find_saved_point") {
+    if (typeof args.query !== "string" || !args.query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    const rows = await findMapPointsByName(userId, args.query);
+    return {
+      result: {
+        matches: rows.map((r) => ({
+          name: r.name,
+          category: r.category,
+          subcategory: r.subcategory,
+          icon: r.icon,
+          lat: r.lat,
+          lon: r.lon,
+          blurb: r.blurb,
+          urls: JSON.parse(r.urls_json),
+        })),
+      },
+      mapData: null,
+    };
+  }
+
+  if (name === "find_wikipedia_articles_in_area") {
+    if (typeof args.location !== "string" || !args.location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const area = await geocodeArea(args.location);
+    if ("error" in area) return { result: area, mapData: null };
+    const limit = typeof args.limit === "number" ? Math.min(Math.max(1, Math.round(args.limit)), 40) : 20;
+    const { articles, areaTooLarge } = await findArticlesInArea(area.boundingBox, limit);
+    if (articles.length === 0) {
+      return { result: { error: `No Wikipedia articles found in ${area.name}` }, mapData: null };
+    }
+    return {
+      result: { count: articles.length, areaTooLarge, titles: articles.map((a) => a.title) },
+      mapData: {
+        kind: "point_suggestion",
+        points: articles.map((a) => ({
+          label: a.title,
+          lat: a.lat,
+          lon: a.lon,
+          icon: "📖",
+          category: "landmark",
+          urls: [a.url],
+          blurb: a.extract,
+        })),
+      },
+    };
+  }
+
   return { result: { error: `Unknown tool: ${name}` }, mapData: null };
 }
 
@@ -601,6 +685,8 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
     "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
+    "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate.",
+    "If the user asks you to find, locate, or list Wikipedia articles or landmarks across a whole area (a county, city, park — not one specific place), call find_wikipedia_articles_in_area instead of search_wikipedia; it previews every result on their map at once. Mention how many were found and ask if they'd like them added — if the tool result says the area was too large to fully cover, say so rather than implying the list is complete.",
     instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
     .filter(Boolean)
@@ -654,13 +740,14 @@ function blankResult(reply: string, droppedMessages: number): ChatResult {
 // so either caller can decide how to fail over.
 async function runGroqPath(params: {
   apiKey: string;
+  userId: string;
   systemPrompt: string;
   message: string;
   history: ChatTurn[];
   droppedMessages: number;
   offerThinkingTool: boolean;
 }): Promise<ChatResult> {
-  const { apiKey, systemPrompt, message, history, droppedMessages, offerThinkingTool } = params;
+  const { apiKey, userId, systemPrompt, message, history, droppedMessages, offerThinkingTool } = params;
 
   // Ask a narrow yes/no question up front rather than hoping the model
   // interrupts its own answer to flag difficulty (see checkDifficulty).
@@ -711,6 +798,8 @@ async function runGroqPath(params: {
     GET_LOCAL_TIME_TOOL,
     CONVERT_CURRENCY_TOOL,
     PROPOSE_MAP_POINT_TOOL,
+    FIND_SAVED_POINT_TOOL,
+    FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL,
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -788,7 +877,7 @@ async function runGroqPath(params: {
     messages.push({ role: "assistant", content: responseMessage.content, tool_calls: responseMessage.tool_calls });
     for (const call of responseMessage.tool_calls) {
       toolsUsed.add(call.function.name);
-      const { result, mapData: toolMapData } = await executeTool(call);
+      const { result, mapData: toolMapData } = await executeTool(call, userId);
       if (toolMapData) mapData = toolMapData;
       messages.push({
         role: "tool",
@@ -814,6 +903,7 @@ async function runGroqPath(params: {
 }
 
 export async function getAssistantReply(params: {
+  userId: string;
   assistantName: string;
   instructions: string;
   message: string;
@@ -835,6 +925,7 @@ export async function getAssistantReply(params: {
   // Gemini regardless of the preferred provider. See getGeminiReply for why.
   if (params.forceReasoningEffort === "default") {
     const result = await getGeminiReply({
+      userId: params.userId,
       systemPrompt,
       message: params.message,
       history,
@@ -847,6 +938,7 @@ export async function getAssistantReply(params: {
   if (preferred === "gemini") {
     try {
       const result = await getGeminiReply({
+        userId: params.userId,
         systemPrompt,
         message: params.message,
         history,
@@ -864,6 +956,7 @@ export async function getAssistantReply(params: {
       try {
         const result = await runGroqPath({
           apiKey: groqKey,
+          userId: params.userId,
           systemPrompt,
           message: params.message,
           history,
@@ -892,6 +985,7 @@ export async function getAssistantReply(params: {
   try {
     return await runGroqPath({
       apiKey: groqKey,
+      userId: params.userId,
       systemPrompt,
       message: params.message,
       history,
@@ -909,6 +1003,7 @@ export async function getAssistantReply(params: {
       err.retryAfterSeconds != null ? ` (back in about ${Math.ceil(err.retryAfterSeconds)}s)` : "";
     try {
       const result = await getGeminiReply({
+        userId: params.userId,
         systemPrompt,
         message: params.message,
         history,

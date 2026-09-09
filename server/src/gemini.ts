@@ -1,10 +1,10 @@
 import { convertCurrency } from "./currency.js";
-import { incrementProviderUsage } from "./db.js";
-import { calculateDistance, categoryIcon, findPlaces, geocode } from "./geo.js";
+import { findMapPointsByName, incrementProviderUsage } from "./db.js";
+import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
-import { searchWikipedia } from "./wikipedia.js";
+import { findArticlesInArea, searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
@@ -160,6 +160,31 @@ const SEARCH_WIKIPEDIA_TOOL = {
         required: ["name", "location", "category", "description"],
       },
     },
+    {
+      name: "find_saved_point",
+      description:
+        "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. Returns up to 5 matches, or an empty list if nothing matches.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The place name to look for among the user's saved points." },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "find_wikipedia_articles_in_area",
+      description:
+        "Find Wikipedia articles located within a geographic area (a county, city, park, etc.) and preview them all as points on the user's map, the same way propose_map_point previews one. Wikipedia's search only reaches about 10km around each point, so a large area is covered by tiling several searches — a very large area (e.g. a whole state) may only be partially covered, which the tool result flags. Use this when the user asks to find, locate, or list Wikipedia articles or landmarks across an area, not for a single specific place.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The area to search, e.g. 'Steuben County, Indiana'." },
+          limit: { type: "number", description: "Max number of articles to return (default 20, max 40)." },
+        },
+        required: ["location"],
+      },
+    },
   ],
 };
 
@@ -272,7 +297,10 @@ export async function verifyRegionStatuses(
   return { mapData: { kind: "regions", points: [], regionType, regions, verified: true } };
 }
 
-async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown; mapData: MapData | null }> {
+async function executeTool(
+  call: GeminiFunctionCall,
+  userId: string
+): Promise<{ result: unknown; mapData: MapData | null }> {
   const args = call.args ?? {};
 
   if (call.name === "search_wikipedia") {
@@ -466,6 +494,58 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
     };
   }
 
+  if (call.name === "find_saved_point") {
+    const query = args.query;
+    if (typeof query !== "string" || !query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    const rows = await findMapPointsByName(userId, query);
+    return {
+      result: {
+        matches: rows.map((r) => ({
+          name: r.name,
+          category: r.category,
+          subcategory: r.subcategory,
+          icon: r.icon,
+          lat: r.lat,
+          lon: r.lon,
+          blurb: r.blurb,
+          urls: JSON.parse(r.urls_json),
+        })),
+      },
+      mapData: null,
+    };
+  }
+
+  if (call.name === "find_wikipedia_articles_in_area") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const area = await geocodeArea(location);
+    if ("error" in area) return { result: area, mapData: null };
+    const limit = typeof args.limit === "number" ? Math.min(Math.max(1, Math.round(args.limit)), 40) : 20;
+    const { articles, areaTooLarge } = await findArticlesInArea(area.boundingBox, limit);
+    if (articles.length === 0) {
+      return { result: { error: `No Wikipedia articles found in ${area.name}` }, mapData: null };
+    }
+    return {
+      result: { count: articles.length, areaTooLarge, titles: articles.map((a) => a.title) },
+      mapData: {
+        kind: "point_suggestion",
+        points: articles.map((a) => ({
+          label: a.title,
+          lat: a.lat,
+          lon: a.lon,
+          icon: "📖",
+          category: "landmark",
+          urls: [a.url],
+          blurb: a.extract,
+        })),
+      },
+    };
+  }
+
   return { result: { error: `Unknown tool: ${call.name}` }, mapData: null };
 }
 
@@ -484,6 +564,7 @@ async function geminiDailyRateLimit(): Promise<DailyRateLimit> {
 // Groq overflow both land here instead of retrying Groq with a budget that
 // was never going to be enough.
 export async function getGeminiReply(params: {
+  userId: string;
   systemPrompt: string;
   message: string;
   history: ChatTurn[];
@@ -581,7 +662,7 @@ export async function getGeminiReply(params: {
 
     contents.push({ role: "model", parts });
     toolsUsed.add(functionCallPart.functionCall.name);
-    const { result, mapData: toolMapData } = await executeTool(functionCallPart.functionCall);
+    const { result, mapData: toolMapData } = await executeTool(functionCallPart.functionCall, params.userId);
     if (toolMapData) mapData = toolMapData;
     contents.push({
       role: "user",

@@ -25,28 +25,36 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
   const [addError, setAddError] = useState<string | null>(null);
 
   const hasStatusLegend = mapData.kind === "regions" && (mapData.regions?.some((r) => r.status) ?? false);
-  const suggestion = mapData.kind === "point_suggestion" ? mapData.points[0] : undefined;
+  const suggestions = mapData.kind === "point_suggestion" ? mapData.points : [];
 
-  async function addSuggestion() {
-    if (!suggestion || !token) return;
+  async function addSuggestions() {
+    if (suggestions.length === 0 || !token) return;
     setAddState("adding");
     setAddError(null);
-    try {
-      await api.createPoint(baseUrl, token, {
-        name: suggestion.label,
-        category: suggestion.category,
-        subcategory: suggestion.subcategory,
-        icon: suggestion.icon,
-        lat: suggestion.lat,
-        lon: suggestion.lon,
-        blurb: suggestion.blurb,
-        urls: suggestion.urls,
-      });
-      setAddState("added");
-    } catch (e) {
-      setAddError(e instanceof Error ? e.message : "Failed to add point");
-      setAddState("idle");
+    let failures = 0;
+    for (const point of suggestions) {
+      try {
+        await api.createPoint(baseUrl, token, {
+          name: point.label,
+          category: point.category,
+          subcategory: point.subcategory,
+          icon: point.icon,
+          lat: point.lat,
+          lon: point.lon,
+          blurb: point.blurb,
+          urls: point.urls,
+        });
+      } catch {
+        failures++;
+      }
     }
+    if (failures === suggestions.length) {
+      setAddError("Failed to add — try again.");
+      setAddState("idle");
+      return;
+    }
+    setAddState("added");
+    if (failures > 0) setAddError(`${failures} of ${suggestions.length} failed to add.`);
   }
 
   let summary: string;
@@ -60,7 +68,10 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
       ? `${highlighted} region${highlighted === 1 ? "" : "s"} allowed or restricted`
       : `${mapData.regions.length} region${mapData.regions.length === 1 ? "" : "s"} highlighted`;
   } else if (mapData.kind === "point_suggestion") {
-    summary = `New point: ${suggestion?.label ?? "Untitled"}`;
+    summary =
+      suggestions.length === 1
+        ? `New point: ${suggestions[0]?.label ?? "Untitled"}`
+        : `${suggestions.length} new points found`;
   } else if (mapData.kind === "landmark") {
     summary = mapData.points[0]?.label ?? "Location found";
   } else {
@@ -96,21 +107,29 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
               </TouchableOpacity>
             )
           ) : null}
-          {suggestion && addState === "idle" ? (
+          {suggestions.length > 0 && addState === "idle" ? (
             <View style={styles.suggestionRow}>
-              <Text style={styles.suggestionText}>Add this to your map?</Text>
+              <Text style={styles.suggestionText}>
+                {suggestions.length === 1 ? "Add this to your map?" : `Add all ${suggestions.length} to your map?`}
+              </Text>
               <View style={styles.suggestionButtons}>
                 <TouchableOpacity onPress={() => setAddState("dismissed")}>
                   <Text style={styles.suggestionDismiss}>No thanks</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.suggestionAddButton} onPress={addSuggestion}>
-                  <Text style={styles.suggestionAddButtonText}>Add to map</Text>
+                <TouchableOpacity style={styles.suggestionAddButton} onPress={addSuggestions}>
+                  <Text style={styles.suggestionAddButtonText}>
+                    {suggestions.length === 1 ? "Add to map" : "Add all"}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
           ) : null}
           {addState === "adding" ? <ActivityIndicator style={styles.spacing} /> : null}
-          {addState === "added" ? <Text style={styles.verifiedLabel}>✓ Added to your map</Text> : null}
+          {addState === "added" ? (
+            <Text style={styles.verifiedLabel}>
+              ✓ {suggestions.length === 1 ? "Added to your map" : `Added ${suggestions.length} to your map`}
+            </Text>
+          ) : null}
           {addError ? <Text style={styles.suggestionError}>{addError}</Text> : null}
         </>
       ) : null}

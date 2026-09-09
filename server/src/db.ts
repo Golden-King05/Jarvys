@@ -177,6 +177,18 @@ export async function getMapPoints(userId: string): Promise<MapPointRow[]> {
   return result.rows as unknown as MapPointRow[];
 }
 
+// Lets the assistant check whether the user already has a saved point for a
+// place before answering a question about it (use it as a source) or before
+// proposing a new one (avoid suggesting a duplicate).
+export async function findMapPointsByName(userId: string, query: string, limit = 5): Promise<MapPointRow[]> {
+  const result = await db.execute({
+    sql: `SELECT * FROM map_points WHERE user_id = ? AND LOWER(name) LIKE LOWER(?)
+          ORDER BY created_at DESC LIMIT ?`,
+    args: [userId, `%${query}%`, limit],
+  });
+  return result.rows as unknown as MapPointRow[];
+}
+
 // A user-initiated add (manual pin or URL import) — overwrites an existing
 // point at the same dedupe key, since re-adding the same spot on purpose
 // means the user wants today's details to win.

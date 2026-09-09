@@ -17,6 +17,7 @@ interface NominatimResult {
   lat: string;
   lon: string;
   display_name: string;
+  boundingbox?: [string, string, string, string]; // [south, north, west, east]
 }
 
 export async function geocode(place: string): Promise<GeoPoint | { error: string }> {
@@ -33,8 +34,50 @@ export async function geocode(place: string): Promise<GeoPoint | { error: string
   return { name: top.display_name, lat: Number(top.lat), lon: Number(top.lon) };
 }
 
+export interface BoundingBox {
+  south: number;
+  north: number;
+  west: number;
+  east: number;
+}
+
+export interface GeoArea extends GeoPoint {
+  boundingBox: BoundingBox;
+}
+
 function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
+}
+
+// Like geocode, but also returns the area's extent — for a whole region
+// (a county, city, park) rather than a single point. Nominatim usually
+// returns a real bounding box for a named area; if it doesn't, fall back to
+// a small ~5km box around the point so callers always get something to tile.
+export async function geocodeArea(place: string): Promise<GeoArea | { error: string }> {
+  const params = new URLSearchParams({ q: place, format: "json", limit: "1" });
+  const res = await fetch(`${NOMINATIM_URL}?${params}`, { headers: { "User-Agent": USER_AGENT } });
+  if (!res.ok) {
+    return { error: `Location lookup failed (${res.status})` };
+  }
+  const data = (await res.json()) as NominatimResult[];
+  const top = data[0];
+  if (!top) {
+    return { error: `Couldn't find a location for "${place}"` };
+  }
+  const lat = Number(top.lat);
+  const lon = Number(top.lon);
+  if (!top.boundingbox) {
+    const dLat = 5 / 111;
+    const dLon = 5 / (111 * Math.cos(toRad(lat)) || 1);
+    return {
+      name: top.display_name,
+      lat,
+      lon,
+      boundingBox: { south: lat - dLat, north: lat + dLat, west: lon - dLon, east: lon + dLon },
+    };
+  }
+  const [south, north, west, east] = top.boundingbox.map(Number);
+  return { name: top.display_name, lat, lon, boundingBox: { south, north, west, east } };
 }
 
 // Straight-line ("as the crow flies") distance — no routing API involved, so

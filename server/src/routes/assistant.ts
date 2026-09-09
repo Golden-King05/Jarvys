@@ -165,6 +165,7 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
 
   try {
     const result = await getAssistantReply({
+      userId: req.userId!,
       assistantName: row!.assistant_name,
       instructions: row!.instructions,
       message: parsed.data.message,
