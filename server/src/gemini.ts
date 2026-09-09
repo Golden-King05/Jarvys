@@ -1,7 +1,7 @@
 import { incrementProviderUsage } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
-import { findRegions } from "./regions.js";
+import { extractRegionsFromText, findRegions } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -298,6 +298,10 @@ export async function getGeminiReply(params: {
     if (!functionCallPart?.functionCall) {
       const text = parts.find((p) => typeof p.text === "string")?.text;
       const reply = text?.trim() ? text : "(empty response from Gemini)";
+      if (!mapData) {
+        const found = extractRegionsFromText(reply);
+        if (found) mapData = { kind: "regions", points: [], regionType: found.regionType, regions: found.regions };
+      }
       return {
         reply,
         usage,

@@ -1,6 +1,6 @@
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import { getGeminiReply } from "./gemini.js";
-import { findRegions, type RegionType } from "./regions.js";
+import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -266,6 +266,12 @@ async function checkDifficulty(apiKey: string, message: string): Promise<Difficu
   }
   const reason = text.replace(/^yes:?\s*/i, "").trim() || "This looks like it needs careful step-by-step thinking.";
   return { usage, rateLimit, thinkingRequest: { reason } };
+}
+
+function regionsFromReply(reply: string): MapData | null {
+  const found = extractRegionsFromText(reply);
+  if (!found) return null;
+  return { kind: "regions", points: [], regionType: found.regionType, regions: found.regions };
 }
 
 async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: MapData | null }> {
@@ -556,7 +562,7 @@ export async function getAssistantReply(params: {
           thinkingRequest: null,
           provider: "groq",
           providerNote: null,
-          mapData,
+          mapData: mapData ?? regionsFromReply(reply),
         };
       }
 

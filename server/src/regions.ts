@@ -69,3 +69,53 @@ export function findRegions(regionType: RegionType, names: string[]): RegionMatc
   }
   return matches;
 }
+
+// Asking the model to explicitly call a tool for "which states allow X"
+// isn't reliable — it already knows the answer from training and just
+// writes it out as a list, no tool needed as far as it's concerned
+// (confirmed: it answered in plain bolded list form without ever calling
+// highlight_regions). Instead of fighting that, read the region names back
+// out of the answer it already wrote — the model reliably **bolds** or
+// bullets each one — so a map appears with zero extra tokens spent asking
+// it to also call a tool.
+function extractCandidatePhrases(text: string): string[] {
+  const candidates = new Set<string>();
+  for (const m of text.matchAll(/\*\*([^*]{2,40})\*\*/g)) {
+    candidates.add(m[1].trim());
+  }
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*(?:[-•*]|\d+[.)])\s*\**([A-Za-z][A-Za-z .'-]{1,40}?)\**\s*[:\-–—]/);
+    if (m) candidates.add(m[1].trim());
+  }
+  return [...candidates];
+}
+
+export function extractRegionsFromText(text: string): { regionType: RegionType; regions: RegionMatch[] } | null {
+  const candidates = extractCandidatePhrases(text);
+  if (candidates.length < 2) return null;
+
+  const stateMatches: RegionMatch[] = [];
+  const countryMatches: RegionMatch[] = [];
+  const seenStates = new Set<string>();
+  const seenCountries = new Set<string>();
+
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    const stateFeature = STATES_INDEX.get(key) ?? STATES_INDEX.get(ALIASES[key] ?? "");
+    if (stateFeature && !seenStates.has(stateFeature.properties.name)) {
+      seenStates.add(stateFeature.properties.name);
+      stateMatches.push({ name: stateFeature.properties.name, geometry: stateFeature.geometry });
+    }
+    const countryFeature = COUNTRIES_INDEX.get(key) ?? COUNTRIES_INDEX.get(ALIASES[key] ?? "");
+    if (countryFeature && !seenCountries.has(countryFeature.properties.name)) {
+      seenCountries.add(countryFeature.properties.name);
+      countryMatches.push({ name: countryFeature.properties.name, geometry: countryFeature.geometry });
+    }
+  }
+
+  // States win ties — "which states" questions are far more common than a
+  // reply that happens to bold two country-shaped words for other reasons.
+  if (stateMatches.length >= 2) return { regionType: "us_state", regions: stateMatches };
+  if (countryMatches.length >= 2) return { regionType: "country", regions: countryMatches };
+  return null;
+}
