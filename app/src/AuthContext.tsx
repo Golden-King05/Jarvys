@@ -1,12 +1,17 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { baseUrlStorage, tokenStorage } from "./storage";
+import { tokenStorage } from "./storage";
+
+// The hosted server (Render). No longer user-configurable — this was a
+// local-dev leftover from before the server was hosted, and having to type
+// a server address to log in was just friction with nothing useful behind
+// it now that there's only ever one server to point at.
+const BASE_URL = "https://jarvys-server-14df.onrender.com";
 
 interface AuthContextValue {
   loading: boolean;
   token: string | null;
   baseUrl: string;
-  setBaseUrl: (url: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -17,36 +22,26 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);
-  const [baseUrl, setBaseUrlState] = useState("");
 
   useEffect(() => {
-    (async () => {
-      const [storedToken, storedBaseUrl] = await Promise.all([
-        tokenStorage.get(),
-        baseUrlStorage.get(),
-      ]);
+    tokenStorage.get().then((storedToken) => {
       setToken(storedToken);
-      setBaseUrlState(storedBaseUrl);
       setLoading(false);
-    })();
+    });
   }, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
       loading,
       token,
-      baseUrl,
-      setBaseUrl: async (url: string) => {
-        await baseUrlStorage.set(url);
-        setBaseUrlState(url);
-      },
+      baseUrl: BASE_URL,
       login: async (email: string, password: string) => {
-        const { token: newToken } = await api.login(baseUrl, email, password);
+        const { token: newToken } = await api.login(BASE_URL, email, password);
         await tokenStorage.set(newToken);
         setToken(newToken);
       },
       register: async (email: string, password: string) => {
-        const { token: newToken } = await api.register(baseUrl, email, password);
+        const { token: newToken } = await api.register(BASE_URL, email, password);
         await tokenStorage.set(newToken);
         setToken(newToken);
       },
@@ -55,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setToken(null);
       },
     }),
-    [loading, token, baseUrl]
+    [loading, token]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

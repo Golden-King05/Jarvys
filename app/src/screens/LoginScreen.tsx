@@ -11,10 +11,9 @@ import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 
 export default function LoginScreen() {
-  const { login, register, baseUrl, setBaseUrl } = useAuth();
+  const { login, register } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [serverUrl, setServerUrl] = useState(baseUrl);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -22,7 +21,6 @@ export default function LoginScreen() {
     setError(null);
     setBusy(true);
     try {
-      await setBaseUrl(serverUrl.trim());
       if (action === "login") {
         await login(email.trim(), password);
       } else {
@@ -39,16 +37,6 @@ export default function LoginScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>Jarvys</Text>
       <Text style={styles.subtitle}>Sign in to sync your assistant everywhere</Text>
-
-      <Text style={styles.label}>Server URL</Text>
-      <TextInput
-        style={styles.input}
-        value={serverUrl}
-        onChangeText={setServerUrl}
-        placeholder="http://localhost:4000"
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
 
       <Text style={styles.label}>Email</Text>
       <TextInput

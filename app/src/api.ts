@@ -147,6 +147,13 @@ export const api = {
       body: { email, password },
     }),
 
+  changePassword: (baseUrl: string, token: string, currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>(baseUrl, "/auth/password", {
+      method: "PUT",
+      token,
+      body: { currentPassword, newPassword },
+    }),
+
   getSettings: (baseUrl: string, token: string) =>
     request<AssistantSettings>(baseUrl, "/assistant/settings", { token }),
 
