@@ -41,6 +41,8 @@ export async function getGeminiReply(params: {
       droppedMessages: params.droppedMessages,
       rateLimit: null,
       thinkingRequest: null,
+      provider: "gemini",
+      providerNote: null,
     };
   }
 
@@ -85,5 +87,7 @@ export async function getGeminiReply(params: {
     droppedMessages: params.droppedMessages,
     rateLimit: null,
     thinkingRequest: null,
+    provider: "gemini",
+    providerNote: null,
   };
 }

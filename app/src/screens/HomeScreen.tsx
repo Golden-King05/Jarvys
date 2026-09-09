@@ -7,7 +7,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { api } from "../api";
+import { api, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
@@ -50,6 +50,7 @@ export default function HomeScreen() {
   const [promptTokenHistory, setPromptTokenHistory] = useState<number[]>([]);
   const [pendingThinking, setPendingThinking] = useState<PendingThinking | null>(null);
   const [resolvingThinking, setResolvingThinking] = useState(false);
+  const [lastProvider, setLastProvider] = useState<Provider | null>(null);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder);
 
@@ -76,6 +77,15 @@ export default function HomeScreen() {
       setPendingThinking({ originalMessage: text, reason: result.thinkingRequest.reason });
       return;
     }
+
+    if (result.provider && lastProvider !== null && result.provider !== lastProvider) {
+      const switchText =
+        result.provider === "gemini"
+          ? (result.providerNote ?? "Switched to Gemini for this reply.")
+          : "Back to Groq.";
+      setMessages((prev) => [...prev, { from: "system", text: switchText }]);
+    }
+    if (result.provider) setLastProvider(result.provider);
 
     setMessages((prev) => [...prev, { from: "assistant", text: result.reply! }]);
     if (!muted) speak(result.reply!);

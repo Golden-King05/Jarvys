@@ -23,6 +23,8 @@ export interface ThinkingRequest {
   reason: string;
 }
 
+export type Provider = "groq" | "gemini";
+
 export interface ChatResponse {
   reply: string | null;
   usage: ChatUsage | null;
@@ -30,6 +32,8 @@ export interface ChatResponse {
   droppedMessages: number;
   rateLimit: DailyRateLimit | null;
   thinkingRequest: ThinkingRequest | null;
+  provider: Provider | null;
+  providerNote: string | null;
 }
 
 export interface StoredMessage {
