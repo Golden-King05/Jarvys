@@ -1,3 +1,4 @@
+import { getGeminiReply } from "./gemini.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -204,6 +205,32 @@ export async function getAssistantReply(params: {
     .filter(Boolean)
     .join(" ");
 
+  let history = params.history;
+  let droppedMessages = 0;
+  const threshold = CONTEXT_WINDOW_TOKENS * COMPRESSION_THRESHOLD_RATIO;
+
+  function estimateTotal(h: ChatTurn[]): number {
+    return (
+      estimateTokens(systemPrompt) +
+      estimateTokens(params.message) +
+      h.reduce((sum, turn) => sum + estimateTokens(turn.content), 0)
+    );
+  }
+
+  // Drop the oldest turns two at a time (a user/assistant pair) to keep the
+  // remaining history alternating sensibly.
+  while (history.length > 0 && estimateTotal(history) > threshold) {
+    history = history.slice(2);
+    droppedMessages += 2;
+  }
+
+  // The user already approved deep thinking (a prior call's checkDifficulty
+  // returned a thinkingRequest and they clicked yes) — hand this one to
+  // Gemini instead of Groq. See getGeminiReply for why.
+  if (reasoningEffort === "default") {
+    return getGeminiReply({ systemPrompt, message: params.message, history, droppedMessages });
+  }
+
   // Ask a narrow yes/no question up front rather than hoping the model
   // interrupts its own answer to flag difficulty (see checkDifficulty).
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -231,25 +258,6 @@ export async function getAssistantReply(params: {
     }
   }
 
-  let history = params.history;
-  let droppedMessages = 0;
-  const threshold = CONTEXT_WINDOW_TOKENS * COMPRESSION_THRESHOLD_RATIO;
-
-  function estimateTotal(h: ChatTurn[]): number {
-    return (
-      estimateTokens(systemPrompt) +
-      estimateTokens(params.message) +
-      h.reduce((sum, turn) => sum + estimateTokens(turn.content), 0)
-    );
-  }
-
-  // Drop the oldest turns two at a time (a user/assistant pair) to keep the
-  // remaining history alternating sensibly.
-  while (history.length > 0 && estimateTotal(history) > threshold) {
-    history = history.slice(2);
-    droppedMessages += 2;
-  }
-
   const messages: GroqMessage[] = [
     { role: "system", content: systemPrompt },
     ...history.map((turn): GroqMessage => ({ role: turn.role, content: turn.content })),
@@ -274,18 +282,12 @@ export async function getAssistantReply(params: {
         // hundreds of output tokens on even a one-line reply — easily
         // enough to trip Groq's free-tier output-tokens-per-minute cap
         // (1,000/min) after just one or two messages. "none" is documented
-        // as the mode for general-purpose dialogue; only switch to
-        // "default" when the user explicitly approved deeper thinking (see
-        // checkDifficulty above).
-        //
-        // Groq enforces that 1,000/min ceiling against whatever
-        // max_completion_tokens we declare, not actual usage — declaring
-        // anything above ~1,000 gets rejected outright (confirmed: 4000
-        // here 429'd immediately even for a short reply), so this has to
-        // stay under the limit in *both* modes. It's a real ceiling on how
-        // long a single answer can be on the free tier, thinking mode
-        // included — there's no way around that without a paid tier.
-        reasoning_effort: reasoningEffort,
+        // as the mode for general-purpose dialogue. Approved deep-thinking
+        // requests never reach this call at all — they're routed to Gemini
+        // above, since Groq's ~900-token reply ceiling (declaring more gets
+        // rejected outright regardless of mode) leaves no room for both
+        // extended reasoning and a full answer.
+        reasoning_effort: "none",
         max_completion_tokens: 900,
       }),
     });
@@ -318,18 +320,7 @@ export async function getAssistantReply(params: {
       usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null;
 
     if (!message?.tool_calls || message.tool_calls.length === 0) {
-      let reply = message?.content ?? "";
-      if (!reply.trim()) {
-        // Extended thinking can burn the entire (Groq free-tier-capped)
-        // output budget on internal reasoning with nothing left for the
-        // actual answer — confirmed happening on a hard puzzle at
-        // reasoning_effort "default". Say so plainly instead of an empty
-        // bubble; there's no larger budget to retry with on this tier.
-        reply =
-          reasoningEffort === "default"
-            ? "I spent this whole reply thinking it through and didn't have room left to write the answer — Groq's free tier caps a single reply too low for both on something this hard. Try asking for a quick answer instead, or break it into smaller questions."
-            : "(empty response from model)";
-      }
+      const reply = message?.content?.trim() ? message.content : "(empty response from model)";
       return { reply, usage, compressed: droppedMessages > 0, droppedMessages, rateLimit, thinkingRequest: null };
     }
 
