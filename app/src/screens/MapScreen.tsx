@@ -281,6 +281,34 @@ export default function MapScreen({
       setLiveLocationError(null);
       return;
     }
+    if (Platform.OS === "web") {
+      // expo-location's web support is incomplete — its permission-check
+      // functions don't reliably call through to the browser's actual
+      // geolocation API, so they can report "not granted" without ever
+      // triggering Safari's real permission prompt (confirmed: clearing
+      // Safari's site data and retrying still showed no prompt and stayed
+      // off). Going straight to the browser's own navigator.geolocation is
+      // the same primitive MapCanvas.web.tsx already uses successfully for
+      // the live marker itself, and it's what actually triggers the
+      // browser's native permission dialog on a first call.
+      if (!("geolocation" in navigator)) {
+        setLiveLocationError("This browser doesn't support location.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        () => {
+          setLiveLocationError(null);
+          setShowLiveLocation(true);
+        },
+        () => {
+          setLiveLocationError(
+            'Location access is blocked for this site — tap the "aA" icon in Safari\'s address bar → Website Settings → Location, or clear this site\'s data under Settings → Safari → Advanced → Website Data, then try again.'
+          );
+        },
+        { timeout: 10000 }
+      );
+      return;
+    }
     try {
       // Same reasoning as the mic permission fix — iOS only ever shows its
       // native dialog once per install, so check the current status first
@@ -291,7 +319,7 @@ export default function MapScreen({
         permission = await Location.requestForegroundPermissionsAsync();
       }
       if (!permission.granted) {
-        if (!permission.canAskAgain && Platform.OS !== "web") {
+        if (!permission.canAskAgain) {
           Linking.openSettings();
         }
         setLiveLocationError("Location access is off for Jarvys — enable it in Settings to show your live position.");
