@@ -1,6 +1,6 @@
 import { convertCurrency } from "./currency.js";
 import { incrementProviderUsage } from "./db.js";
-import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
+import { calculateDistance, categoryIcon, findPlaces, geocode } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
@@ -138,6 +138,26 @@ const SEARCH_WIKIPEDIA_TOOL = {
           to: { type: "string", description: "The target currency code, e.g. EUR." },
         },
         required: ["amount", "from", "to"],
+      },
+    },
+    {
+      name: "propose_map_point",
+      description:
+        "Preview a new point for the user's saved map — use this when the user asks you to write, generate, or create a description for a place (especially one they want added to their map), never for an ordinary factual question (use search_wikipedia for those instead). Write the description yourself in the 'description' argument first. This only geocodes the location and shows a preview on their map for them to accept or dismiss — it does NOT save anything by itself.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "A short name for the point, e.g. 'Wells Street Bridge'." },
+          location: {
+            type: "string",
+            description: "The place to geocode, precise enough to find, e.g. 'Wells Street Bridge, Fort Wayne, Indiana'.",
+          },
+          category: { type: "string", description: "A short category, e.g. 'landmark', 'bridge', 'restaurant'." },
+          subcategory: { type: "string", description: "A more specific subcategory, if useful." },
+          icon: { type: "string", description: "A single emoji that fits the place, e.g. 🌉 for a bridge." },
+          description: { type: "string", description: "The description you wrote for this place, in your own words." },
+        },
+        required: ["name", "location", "category", "description"],
       },
     },
   ],
@@ -416,6 +436,34 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
       return { result: { error: "Missing required 'amount'/'from'/'to' arguments" }, mapData: null };
     }
     return { result: await convertCurrency(amount, from, to), mapData: null };
+  }
+
+  if (call.name === "propose_map_point") {
+    const name = args.name;
+    const location = args.location;
+    const description = args.description;
+    if (typeof name !== "string" || !name || typeof location !== "string" || !location || typeof description !== "string" || !description) {
+      return { result: { error: "Missing required 'name'/'location'/'description' arguments" }, mapData: null };
+    }
+    const geo = await geocode(location);
+    if ("error" in geo) return { result: geo, mapData: null };
+    return {
+      result: { name, lat: geo.lat, lon: geo.lon },
+      mapData: {
+        kind: "point_suggestion",
+        points: [
+          {
+            label: name,
+            lat: geo.lat,
+            lon: geo.lon,
+            icon: typeof args.icon === "string" && args.icon ? args.icon : "📍",
+            category: typeof args.category === "string" ? args.category : "",
+            subcategory: typeof args.subcategory === "string" ? args.subcategory : undefined,
+            blurb: description,
+          },
+        ],
+      },
+    };
   }
 
   return { result: { error: `Unknown tool: ${call.name}` }, mapData: null };

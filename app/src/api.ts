@@ -52,7 +52,7 @@ export interface RegionMapData {
 }
 
 export interface MapData {
-  kind: "places" | "distance" | "landmark" | "regions";
+  kind: "places" | "distance" | "landmark" | "regions" | "point_suggestion";
   points: MapPoint[];
   distanceMiles?: number;
   distanceKm?: number;

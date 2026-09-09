@@ -1,5 +1,5 @@
 import { convertCurrency } from "./currency.js";
-import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
+import { calculateDistance, categoryIcon, findPlaces, geocode } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
@@ -74,7 +74,7 @@ export interface RegionMapData {
 // Structured geo data from the map tools, for the Map screen to plot —
 // separate from the natural-language reply describing it.
 export interface MapData {
-  kind: "places" | "distance" | "landmark" | "regions";
+  kind: "places" | "distance" | "landmark" | "regions" | "point_suggestion";
   points: MapPoint[];
   distanceMiles?: number;
   distanceKm?: number;
@@ -274,6 +274,30 @@ const CONVERT_CURRENCY_TOOL = {
         to: { type: "string", description: "The target currency code, e.g. EUR." },
       },
       required: ["amount", "from", "to"],
+    },
+  },
+};
+
+const PROPOSE_MAP_POINT_TOOL = {
+  type: "function",
+  function: {
+    name: "propose_map_point",
+    description:
+      "Preview a new point for the user's saved map — use this when the user asks you to write, generate, or create a description for a place (especially one they want added to their map), never for an ordinary factual question (use search_wikipedia for those instead). Write the description yourself in the 'description' argument first. This only geocodes the location and shows a preview on their map for them to accept or dismiss — it does NOT save anything by itself.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "A short name for the point, e.g. 'Wells Street Bridge'." },
+        location: {
+          type: "string",
+          description: "The place to geocode, precise enough to find, e.g. 'Wells Street Bridge, Fort Wayne, Indiana'.",
+        },
+        category: { type: "string", description: "A short category, e.g. 'landmark', 'bridge', 'restaurant'." },
+        subcategory: { type: "string", description: "A more specific subcategory, if useful." },
+        icon: { type: "string", description: "A single emoji that fits the place, e.g. 🌉 for a bridge." },
+        description: { type: "string", description: "The description you wrote for this place, in your own words." },
+      },
+      required: ["name", "location", "category", "description"],
     },
   },
 };
@@ -520,6 +544,38 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
     return { result: await convertCurrency(args.amount, args.from, args.to), mapData: null };
   }
 
+  if (name === "propose_map_point") {
+    if (
+      typeof args.name !== "string" ||
+      !args.name ||
+      typeof args.location !== "string" ||
+      !args.location ||
+      typeof args.description !== "string" ||
+      !args.description
+    ) {
+      return { result: { error: "Missing required 'name'/'location'/'description' arguments" }, mapData: null };
+    }
+    const geo = await geocode(args.location);
+    if ("error" in geo) return { result: geo, mapData: null };
+    return {
+      result: { name: args.name, lat: geo.lat, lon: geo.lon },
+      mapData: {
+        kind: "point_suggestion",
+        points: [
+          {
+            label: args.name,
+            lat: geo.lat,
+            lon: geo.lon,
+            icon: typeof args.icon === "string" && args.icon ? args.icon : "📍",
+            category: typeof args.category === "string" ? args.category : "",
+            subcategory: typeof args.subcategory === "string" ? args.subcategory : undefined,
+            blurb: args.description,
+          },
+        ],
+      },
+    };
+  }
+
   return { result: { error: `Unknown tool: ${name}` }, mapData: null };
 }
 
@@ -544,6 +600,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
     "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
+    "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
     instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
     .filter(Boolean)
@@ -653,6 +710,7 @@ async function runGroqPath(params: {
     GET_WEATHER_TOOL,
     GET_LOCAL_TIME_TOOL,
     CONVERT_CURRENCY_TOOL,
+    PROPOSE_MAP_POINT_TOOL,
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {

@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MapCanvas from "./MapCanvas";
 import PointDetailModal from "./PointDetailModal";
 import RegionDetailModal from "./RegionDetailModal";
 import RegionLegend from "./RegionLegend";
-import type { MapData, MapPoint, RegionMapData } from "../api";
+import { api, type MapData, type MapPoint, type RegionMapData } from "../api";
+import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 
 interface InlineMapCardProps {
@@ -16,11 +17,37 @@ interface InlineMapCardProps {
 // plotted something — collapsible so a long chat doesn't turn into a wall
 // of little maps.
 export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardProps) {
+  const { baseUrl, token } = useAuth();
   const [expanded, setExpanded] = useState(true);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
+  const [addState, setAddState] = useState<"idle" | "adding" | "added" | "dismissed">("idle");
+  const [addError, setAddError] = useState<string | null>(null);
 
   const hasStatusLegend = mapData.kind === "regions" && (mapData.regions?.some((r) => r.status) ?? false);
+  const suggestion = mapData.kind === "point_suggestion" ? mapData.points[0] : undefined;
+
+  async function addSuggestion() {
+    if (!suggestion || !token) return;
+    setAddState("adding");
+    setAddError(null);
+    try {
+      await api.createPoint(baseUrl, token, {
+        name: suggestion.label,
+        category: suggestion.category,
+        subcategory: suggestion.subcategory,
+        icon: suggestion.icon,
+        lat: suggestion.lat,
+        lon: suggestion.lon,
+        blurb: suggestion.blurb,
+        urls: suggestion.urls,
+      });
+      setAddState("added");
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : "Failed to add point");
+      setAddState("idle");
+    }
+  }
 
   let summary: string;
   if (mapData.kind === "distance" && mapData.distanceMiles != null) {
@@ -32,6 +59,8 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
     summary = hasStatusLegend
       ? `${highlighted} region${highlighted === 1 ? "" : "s"} allowed or restricted`
       : `${mapData.regions.length} region${mapData.regions.length === 1 ? "" : "s"} highlighted`;
+  } else if (mapData.kind === "point_suggestion") {
+    summary = `New point: ${suggestion?.label ?? "Untitled"}`;
   } else if (mapData.kind === "landmark") {
     summary = mapData.points[0]?.label ?? "Location found";
   } else {
@@ -67,6 +96,22 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
               </TouchableOpacity>
             )
           ) : null}
+          {suggestion && addState === "idle" ? (
+            <View style={styles.suggestionRow}>
+              <Text style={styles.suggestionText}>Add this to your map?</Text>
+              <View style={styles.suggestionButtons}>
+                <TouchableOpacity onPress={() => setAddState("dismissed")}>
+                  <Text style={styles.suggestionDismiss}>No thanks</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.suggestionAddButton} onPress={addSuggestion}>
+                  <Text style={styles.suggestionAddButtonText}>Add to map</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+          {addState === "adding" ? <ActivityIndicator style={styles.spacing} /> : null}
+          {addState === "added" ? <Text style={styles.verifiedLabel}>✓ Added to your map</Text> : null}
+          {addError ? <Text style={styles.suggestionError}>{addError}</Text> : null}
         </>
       ) : null}
       <PointDetailModal point={selectedPoint} onClose={() => setSelectedPoint(null)} />
@@ -96,4 +141,24 @@ const styles = StyleSheet.create({
     textAlign: "center",
     paddingVertical: 8,
   },
+  suggestionRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  suggestionText: { fontFamily: fonts.medium, fontSize: 12, color: "#444", flex: 1, marginRight: 8 },
+  suggestionButtons: { flexDirection: "row", alignItems: "center", gap: 14 },
+  suggestionDismiss: { fontFamily: fonts.medium, fontSize: 12, color: "#888" },
+  suggestionAddButton: { backgroundColor: "#2980b9", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
+  suggestionAddButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#fff" },
+  suggestionError: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    color: "#c0392b",
+    textAlign: "center",
+    paddingBottom: 8,
+  },
+  spacing: { paddingVertical: 8 },
 });
