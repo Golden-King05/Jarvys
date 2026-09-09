@@ -1,77 +1,224 @@
-import React from "react";
-import { Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import type { MapPoint, Point } from "../api";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Linking,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { isSavedPoint, type MapPoint, type Point } from "../api";
 import { fonts } from "../theme";
 
 type DetailSource = Point | MapPoint;
+
+interface SavePatch {
+  name: string;
+  category: string;
+  subcategory: string;
+  icon: string;
+  blurb: string;
+  urls: string[];
+}
 
 interface PointDetailModalProps {
   point: DetailSource | null;
   onClose: () => void;
   onDelete?: () => void;
+  // Only offered for a saved Point (has somewhere to persist to) — an
+  // ephemeral MapPoint from a fresh search just gets viewed, not edited.
+  onSave?: (patch: SavePatch) => Promise<void> | void;
 }
 
-function isSavedPoint(p: DetailSource): p is Point {
-  return "id" in p;
+function pointKey(point: DetailSource): string {
+  return isSavedPoint(point) ? point.id : `${point.label}:${point.lat}:${point.lon}`;
 }
 
 // Shared between the full Map screen and the inline map card in chat — a
 // saved Point and an in-flight MapPoint from a fresh search look almost the
 // same, this just normalizes the field names between them.
-export default function PointDetailModal({ point, onClose, onDelete }: PointDetailModalProps) {
+export default function PointDetailModal({ point, onClose, onDelete, onSave }: PointDetailModalProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", urls: "" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditing(false);
+    setError(null);
+  }, [point ? pointKey(point) : null]);
+
   if (!point) return null;
 
   const saved = isSavedPoint(point);
   const name = saved ? point.name : point.label;
-  const icon = (saved ? point.icon : point.icon) || "📍";
-  const category = saved ? point.category : point.category;
-  const subcategory = saved ? point.subcategory : point.subcategory;
-  const urls = (saved ? point.urls : point.urls) ?? [];
-  const blurb = (saved ? point.blurb : point.blurb) || (!saved ? point.address : "") || "";
+  const icon = point.icon || "📍";
+  const category = point.category;
+  const subcategory = point.subcategory;
+  const urls = point.urls ?? [];
+  const blurb = point.blurb || (!saved ? point.address : "") || "";
+
+  function startEditing() {
+    setDraft({
+      name,
+      category: category ?? "",
+      subcategory: subcategory ?? "",
+      icon,
+      blurb,
+      urls: urls.join("\n"),
+    });
+    setError(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    if (!onSave) return;
+    if (!draft.name.trim()) {
+      setError("Give it a name.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        name: draft.name.trim(),
+        category: draft.category.trim(),
+        subcategory: draft.subcategory.trim(),
+        icon: draft.icon.trim() || "📍",
+        blurb: draft.blurb.trim(),
+        urls: draft.urls
+          .split("\n")
+          .map((u) => u.trim())
+          .filter(Boolean),
+      });
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.card}>
-          <View style={styles.header}>
-            <Text style={styles.icon}>{icon}</Text>
-            <View style={styles.headerText}>
-              <Text style={styles.name}>{name}</Text>
-              {category ? (
-                <Text style={styles.category}>
-                  {category}
-                  {subcategory ? ` · ${subcategory}` : ""}
-                </Text>
-              ) : null}
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <Text style={styles.close}>✕</Text>
-            </TouchableOpacity>
-          </View>
-
-          {blurb ? (
-            <ScrollView style={styles.blurbBox}>
-              <Text style={styles.blurb}>{blurb}</Text>
-            </ScrollView>
-          ) : null}
-
-          {urls.length > 0 ? (
-            <View style={styles.urlsBox}>
-              {urls.map((u, i) => (
-                <TouchableOpacity key={i} onPress={() => Linking.openURL(u)}>
-                  <Text style={styles.url} numberOfLines={1}>
-                    {u}
-                  </Text>
+          {editing ? (
+            <ScrollView contentContainerStyle={{ paddingBottom: 4 }}>
+              <View style={styles.header}>
+                <Text style={styles.editTitle}>Edit point</Text>
+                <TouchableOpacity onPress={onClose} hitSlop={8}>
+                  <Text style={styles.close}>✕</Text>
                 </TouchableOpacity>
-              ))}
-            </View>
-          ) : null}
+              </View>
+              <TextInput
+                style={styles.input}
+                placeholder="Name"
+                value={draft.name}
+                onChangeText={(v) => setDraft((d) => ({ ...d, name: v }))}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Category (e.g. restaurant)"
+                value={draft.category}
+                onChangeText={(v) => setDraft((d) => ({ ...d, category: v }))}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Subcategory (e.g. Chinese fusion restaurant)"
+                value={draft.subcategory}
+                onChangeText={(v) => setDraft((d) => ({ ...d, subcategory: v }))}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Icon emoji"
+                value={draft.icon}
+                onChangeText={(v) => setDraft((d) => ({ ...d, icon: v }))}
+              />
+              <TextInput
+                style={[styles.input, styles.blurbInput]}
+                placeholder="Notes"
+                multiline
+                value={draft.blurb}
+                onChangeText={(v) => setDraft((d) => ({ ...d, blurb: v }))}
+              />
+              <TextInput
+                style={[styles.input, styles.urlsInput]}
+                placeholder="Links, one per line"
+                multiline
+                autoCapitalize="none"
+                value={draft.urls}
+                onChangeText={(v) => setDraft((d) => ({ ...d, urls: v }))}
+              />
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <View style={styles.formButtons}>
+                <TouchableOpacity onPress={() => setEditing(false)} disabled={saving}>
+                  <Text style={styles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+                {saving ? (
+                  <ActivityIndicator />
+                ) : (
+                  <TouchableOpacity style={styles.saveButton} onPress={save}>
+                    <Text style={styles.saveButtonText}>Save</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </ScrollView>
+          ) : (
+            <>
+              <View style={styles.header}>
+                <Text style={styles.icon}>{icon}</Text>
+                <View style={styles.headerText}>
+                  <Text style={styles.name}>{name}</Text>
+                  {category ? (
+                    <Text style={styles.category}>
+                      {category}
+                      {subcategory ? ` · ${subcategory}` : ""}
+                    </Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity onPress={onClose} hitSlop={8}>
+                  <Text style={styles.close}>✕</Text>
+                </TouchableOpacity>
+              </View>
 
-          {onDelete ? (
-            <TouchableOpacity onPress={onDelete} style={styles.deleteButton}>
-              <Text style={styles.deleteText}>Remove point</Text>
-            </TouchableOpacity>
-          ) : null}
+              {blurb ? (
+                <ScrollView style={styles.blurbBox}>
+                  <Text style={styles.blurb}>{blurb}</Text>
+                </ScrollView>
+              ) : null}
+
+              {urls.length > 0 ? (
+                <View style={styles.urlsBox}>
+                  {urls.map((u, i) => (
+                    <TouchableOpacity key={i} onPress={() => Linking.openURL(u)}>
+                      <Text style={styles.url} numberOfLines={1}>
+                        {u}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+
+              {onSave || onDelete ? (
+                <View style={styles.actionsRow}>
+                  {onSave ? (
+                    <TouchableOpacity onPress={startEditing}>
+                      <Text style={styles.editText}>Edit</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {onDelete ? (
+                    <TouchableOpacity onPress={onDelete}>
+                      <Text style={styles.deleteText}>Remove point</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
       </View>
     </Modal>
@@ -80,17 +227,35 @@ export default function PointDetailModal({ point, onClose, onDelete }: PointDeta
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center" },
-  card: { backgroundColor: "#fff", borderRadius: 16, padding: 18, width: 320, maxWidth: "90%" },
-  header: { flexDirection: "row", alignItems: "flex-start" },
+  card: { backgroundColor: "#fff", borderRadius: 16, padding: 18, width: 320, maxWidth: "90%", maxHeight: "80%" },
+  header: { flexDirection: "row", alignItems: "flex-start", marginBottom: 4 },
   icon: { fontSize: 26, marginRight: 10 },
   headerText: { flex: 1 },
   name: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222" },
+  editTitle: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222", flex: 1 },
   category: { fontFamily: fonts.regular, fontSize: 12, color: "#888", marginTop: 2 },
   close: { fontFamily: fonts.medium, fontSize: 16, color: "#888" },
   blurbBox: { maxHeight: 120, marginTop: 12 },
   blurb: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 18, color: "#444" },
   urlsBox: { marginTop: 12, gap: 4 },
   url: { fontFamily: fonts.regular, fontSize: 12, color: "#2980b9" },
-  deleteButton: { marginTop: 16, alignSelf: "flex-start" },
+  actionsRow: { flexDirection: "row", gap: 20, marginTop: 16 },
+  editText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
   deleteText: { fontFamily: fonts.medium, fontSize: 13, color: "#c0392b" },
+  input: {
+    fontFamily: fonts.regular,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  blurbInput: { minHeight: 70, textAlignVertical: "top" },
+  urlsInput: { minHeight: 50, textAlignVertical: "top" },
+  error: { fontFamily: fonts.regular, fontSize: 12, color: "#c0392b", marginBottom: 8 },
+  formButtons: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 },
+  cancelText: { fontFamily: fonts.medium, fontSize: 13, color: "#888" },
+  saveButton: { backgroundColor: "#2980b9", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  saveButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#fff" },
 });

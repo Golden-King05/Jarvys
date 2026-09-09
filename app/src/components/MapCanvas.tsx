@@ -15,6 +15,7 @@ interface MapCanvasProps {
   onMapPress?: (lat: number, lon: number) => void;
   onPointPress?: (point: MapPoint) => void;
   onRegionPress?: (region: RegionMapData) => void;
+  onPointDragEnd?: (point: MapPoint, lat: number, lon: number) => void;
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
@@ -44,6 +45,7 @@ export default function MapCanvas({
   onMapPress,
   onPointPress,
   onRegionPress,
+  onPointDragEnd,
   pendingMarker,
   showRadar,
   showTimezoneBands,
@@ -152,6 +154,13 @@ export default function MapCanvas({
           coordinate={{ latitude: p.lat, longitude: p.lon }}
           onPress={() => onPointPress?.(p)}
           tracksViewChanges={false}
+          // Only a point backed by a saved Point (has an id) has somewhere
+          // to persist a drag to — an ephemeral result like a distance
+          // endpoint just isn't draggable.
+          draggable={Boolean(p.id)}
+          onDragEnd={(e) =>
+            onPointDragEnd?.(p, e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)
+          }
         >
           <View style={styles.markerBubble}>
             <Text style={styles.markerEmoji}>{p.icon ?? "📍"}</Text>

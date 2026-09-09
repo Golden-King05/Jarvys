@@ -26,6 +26,10 @@ export interface ThinkingRequest {
 export type Provider = "groq" | "gemini";
 
 export interface MapPoint {
+  // Only present when this point mirrors a saved Point (from the /points
+  // list) — lets the map know it's editable/draggable, since an ephemeral
+  // result (e.g. a distance endpoint) has nowhere to persist a drag to.
+  id?: string;
   label: string;
   lat: number;
   lon: number;
@@ -91,6 +95,14 @@ export interface Point {
   blurb: string;
   source: string;
   createdAt: string;
+}
+
+// A saved Point and an in-flight MapPoint from a fresh search share some
+// field names (icon, category...) but a MapPoint's `id` is optional and
+// present only when it mirrors a saved Point, so "id" in p alone doesn't
+// reliably discriminate the union — createdAt only ever exists on Point.
+export function isSavedPoint(p: Point | MapPoint): p is Point {
+  return "createdAt" in p;
 }
 
 export interface NewPoint {
@@ -207,6 +219,9 @@ export const api = {
     }
     return { needsLocation: false, point: data as Point };
   },
+
+  updatePoint: (baseUrl: string, token: string, id: string, patch: Partial<NewPoint>) =>
+    request<Point>(baseUrl, `/points/${id}`, { method: "PUT", token, body: patch }),
 
   deletePoint: (baseUrl: string, token: string, id: string) =>
     request<{ ok: boolean }>(baseUrl, `/points/${id}`, { method: "DELETE", token }),

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { createMapPoint, deleteMapPoint, getMapPoints } from "../db.js";
+import { createMapPoint, deleteMapPoint, getMapPoints, updateMapPoint } from "../db.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { importPointFromUrl } from "../pointImport.js";
 
@@ -108,6 +108,31 @@ pointsRouter.post("/from-url", async (req: AuthedRequest, res) => {
     source: "import",
   });
   res.json(toApiPoint(point));
+});
+
+const updateSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  category: z.string().max(60).optional(),
+  subcategory: z.string().max(60).optional(),
+  icon: z.string().max(8).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lon: z.number().min(-180).max(180).optional(),
+  urls: z.array(z.string().url()).max(10).optional(),
+  blurb: z.string().max(4000).optional(),
+});
+
+// Covers both the detail-form edit and a marker dragged to a new spot on
+// the map (a lat/lon-only patch) — same endpoint either way.
+pointsRouter.put("/:id", async (req: AuthedRequest, res) => {
+  const parsed = updateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
+  }
+  const updated = await updateMapPoint(req.userId!, req.params.id, parsed.data);
+  if (!updated) {
+    return res.status(404).json({ error: "Point not found" });
+  }
+  res.json(toApiPoint(updated));
 });
 
 pointsRouter.delete("/:id", async (req: AuthedRequest, res) => {

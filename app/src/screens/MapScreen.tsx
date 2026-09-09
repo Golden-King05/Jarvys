@@ -14,7 +14,7 @@ import MapCanvas from "../components/MapCanvas";
 import PointDetailModal from "../components/PointDetailModal";
 import RegionDetailModal from "../components/RegionDetailModal";
 import RegionLegend from "../components/RegionLegend";
-import { api, type MapData, type MapPoint, type Point, type RegionMapData } from "../api";
+import { api, isSavedPoint, type MapData, type MapPoint, type Point, type RegionMapData } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 
@@ -27,6 +27,7 @@ type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awai
 
 function toMapPoint(p: Point): MapPoint {
   return {
+    id: p.id,
     label: p.name,
     lat: p.lat,
     lon: p.lon,
@@ -206,7 +207,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   }
 
   async function handleDeleteSelected() {
-    if (!selectedPoint || !("id" in selectedPoint) || !token) return;
+    if (!selectedPoint || !isSavedPoint(selectedPoint) || !token) return;
     try {
       await api.deletePoint(baseUrl, token, selectedPoint.id);
       await loadPoints();
@@ -214,6 +215,31 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
       // Leave the point selected if the delete failed — nothing to reconcile.
     } finally {
       setSelectedPoint(null);
+    }
+  }
+
+  async function handleSaveSelected(patch: {
+    name: string;
+    category: string;
+    subcategory: string;
+    icon: string;
+    blurb: string;
+    urls: string[];
+  }) {
+    if (!selectedPoint || !isSavedPoint(selectedPoint) || !token) return;
+    const updated = await api.updatePoint(baseUrl, token, selectedPoint.id, patch);
+    await loadPoints();
+    setSelectedPoint(updated);
+  }
+
+  async function handlePointDragEnd(point: MapPoint, lat: number, lon: number) {
+    if (!point.id || !token) return;
+    try {
+      await api.updatePoint(baseUrl, token, point.id, { lat, lon });
+      await loadPoints();
+    } catch {
+      // A failed drag just leaves the pin wherever it was before the next
+      // refresh — no local rollback needed since we never moved local state.
     }
   }
 
@@ -233,6 +259,7 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
           onMapPress={handleMapPress}
           onPointPress={setSelectedPoint}
           onRegionPress={setSelectedRegion}
+          onPointDragEnd={handlePointDragEnd}
           pendingMarker={addStep === "details" ? pendingLocation : null}
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
@@ -280,7 +307,8 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
       <PointDetailModal
         point={selectedPoint}
         onClose={() => setSelectedPoint(null)}
-        onDelete={selectedPoint && "id" in selectedPoint ? handleDeleteSelected : undefined}
+        onDelete={selectedPoint && isSavedPoint(selectedPoint) ? handleDeleteSelected : undefined}
+        onSave={selectedPoint && isSavedPoint(selectedPoint) ? handleSaveSelected : undefined}
       />
       <RegionDetailModal region={selectedRegion} onClose={() => setSelectedRegion(null)} />
 

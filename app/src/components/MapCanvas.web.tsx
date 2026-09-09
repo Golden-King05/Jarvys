@@ -45,6 +45,7 @@ interface MapCanvasProps {
   onMapPress?: (lat: number, lon: number) => void;
   onPointPress?: (point: MapPoint) => void;
   onRegionPress?: (region: RegionMapData) => void;
+  onPointDragEnd?: (point: MapPoint, lat: number, lon: number) => void;
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
@@ -68,6 +69,7 @@ export default function MapCanvas({
   onMapPress,
   onPointPress,
   onRegionPress,
+  onPointDragEnd,
   pendingMarker,
   showRadar,
   showTimezoneBands,
@@ -137,10 +139,19 @@ export default function MapCanvas({
       }
 
       points.forEach((p: MapPoint) => {
-        L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "📍") })
+        // Only a point backed by a saved Point (has an id) has somewhere to
+        // persist a drag to — an ephemeral result like a distance endpoint
+        // just isn't draggable.
+        const marker = L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "📍"), draggable: Boolean(p.id) })
           .addTo(layer)
           .bindPopup(p.address ? `${p.label}<br>${p.address}` : p.label)
           .on("click", () => onPointPress?.(p));
+        if (p.id) {
+          marker.on("dragend", () => {
+            const { lat, lng } = marker.getLatLng();
+            onPointDragEnd?.(p, lat, lng);
+          });
+        }
       });
 
       if (pendingMarker) {
@@ -165,7 +176,7 @@ export default function MapCanvas({
         if (layerBounds?.isValid?.()) map.fitBounds(layerBounds, { padding: [40, 40] });
       }
     });
-  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress]);
+  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress, onPointDragEnd]);
 
   // Radar and timezone bands live on their own persistent layers (not the
   // layerGroup above, which gets torn down and rebuilt on every points/

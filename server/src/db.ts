@@ -236,3 +236,62 @@ export async function deleteMapPoint(userId: string, id: string): Promise<boolea
   });
   return result.rowsAffected > 0;
 }
+
+export interface UpdateMapPoint {
+  name?: string;
+  category?: string;
+  subcategory?: string;
+  icon?: string;
+  lat?: number;
+  lon?: number;
+  urls?: string[];
+  blurb?: string;
+}
+
+// Covers both edits from the detail form and a marker dragged to a new spot
+// (just a lat/lon-only patch) — same endpoint either way.
+export async function updateMapPoint(
+  userId: string,
+  id: string,
+  patch: UpdateMapPoint
+): Promise<MapPointRow | null> {
+  const current = await db.execute({
+    sql: "SELECT * FROM map_points WHERE id = ? AND user_id = ?",
+    args: [id, userId],
+  });
+  const row = current.rows[0] as unknown as MapPointRow | undefined;
+  if (!row) return null;
+
+  const next = {
+    name: patch.name ?? row.name,
+    category: patch.category ?? row.category,
+    subcategory: patch.subcategory ?? row.subcategory,
+    icon: patch.icon ?? row.icon,
+    lat: patch.lat ?? row.lat,
+    lon: patch.lon ?? row.lon,
+    urls_json: patch.urls ? JSON.stringify(patch.urls) : row.urls_json,
+    blurb: patch.blurb ?? row.blurb,
+  };
+
+  await db.execute({
+    sql: `UPDATE map_points
+          SET name = ?, category = ?, subcategory = ?, icon = ?, lat = ?, lon = ?, urls_json = ?, blurb = ?, dedupe_key = ?
+          WHERE id = ? AND user_id = ?`,
+    args: [
+      next.name,
+      next.category,
+      next.subcategory,
+      next.icon,
+      next.lat,
+      next.lon,
+      next.urls_json,
+      next.blurb,
+      dedupeKeyFor(next.name, next.lat, next.lon),
+      id,
+      userId,
+    ],
+  });
+
+  const updated = await db.execute({ sql: "SELECT * FROM map_points WHERE id = ?", args: [id] });
+  return updated.rows[0] as unknown as MapPointRow;
+}
