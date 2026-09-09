@@ -100,6 +100,12 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   const [showLayers, setShowLayers] = useState(false);
   const [showRadar, setShowRadar] = useState(false);
   const [showTimezoneBands, setShowTimezoneBands] = useState(false);
+  const [showPins, setShowPins] = useState(true);
+
+  // Below this zoom, saved points stay hidden — with enough of them saved,
+  // a fully zoomed-out view turns into an unreadable wall of overlapping
+  // emoji. Zooming in past roughly a metro-area view reveals them.
+  const MIN_PIN_ZOOM = 8;
   const [focusSignal, setFocusSignal] = useState(0);
 
   useEffect(() => {
@@ -347,6 +353,8 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
           pendingMarker={addStep === "details" ? pendingLocation : null}
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
+          showPins={showPins}
+          minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
         />
 
@@ -405,6 +413,14 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
               <TouchableOpacity onPress={() => setShowLayers(false)} hitSlop={8}>
                 <Text style={styles.closeIcon}>✕</Text>
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Saved pins</Text>
+                <Text style={styles.layerHint}>Hidden until zoomed in, even when on</Text>
+              </View>
+              <Switch value={showPins} onValueChange={setShowPins} />
             </View>
 
             <View style={styles.layerRow}>

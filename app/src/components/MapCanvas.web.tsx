@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { MapPoint, RegionMapData } from "../api";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
@@ -49,6 +49,16 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
+  // switch) — defaults to shown.
+  showPins?: boolean;
+  // Below this zoom level, point markers are hidden regardless of showPins —
+  // a large saved collection is unreadable as a wall of overlapping emoji
+  // once zoomed out to a whole state or country, so pins only appear once
+  // zoomed in close enough to tell them apart. Undefined (the default, used
+  // by the small inline map card in chat) means no such limit — a freshly
+  // found result should always be visible right away.
+  minPinZoom?: number;
   // Bump this (e.g. a counter) when the camera should re-fit to the current
   // points/regions — a brand new AI result arriving, say. Without an
   // explicit signal like this, the map would have to guess "did the point
@@ -80,6 +90,8 @@ export default function MapCanvas({
   pendingMarker,
   showRadar,
   showTimezoneBands,
+  showPins = true,
+  minPinZoom,
   focusKey,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -90,6 +102,8 @@ export default function MapCanvas({
   const hasFitInitially = useRef(false);
   const onMapPressRef = useRef(onMapPress);
   onMapPressRef.current = onMapPress;
+  const [currentZoom, setCurrentZoom] = useState(initialRegion ? 12 : 4);
+  const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
 
   function fitToContent(L: Leaflet, map: Leaflet) {
     if (points.length === 1) {
@@ -118,6 +132,7 @@ export default function MapCanvas({
       map.on("click", (e: { latlng: { lat: number; lng: number } }) => {
         onMapPressRef.current?.(e.latlng.lat, e.latlng.lng);
       });
+      map.on("zoomend", () => setCurrentZoom(map.getZoom()));
       mapInstance.current = map;
       layerGroup.current = L.layerGroup().addTo(map);
       setTimeout(() => map.invalidateSize(), 0);
@@ -162,21 +177,23 @@ export default function MapCanvas({
         ).addTo(layer);
       }
 
-      points.forEach((p: MapPoint) => {
-        // Only a point backed by a saved Point (has an id) has somewhere to
-        // persist a drag to — an ephemeral result like a distance endpoint
-        // just isn't draggable.
-        const marker = L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "📍"), draggable: Boolean(p.id) })
-          .addTo(layer)
-          .bindPopup(p.address ? `${p.label}<br>${p.address}` : p.label)
-          .on("click", () => onPointPress?.(p));
-        if (p.id) {
-          marker.on("dragend", () => {
-            const { lat, lng } = marker.getLatLng();
-            onPointDragEnd?.(p, lat, lng);
-          });
-        }
-      });
+      if (shouldShowPins) {
+        points.forEach((p: MapPoint) => {
+          // Only a point backed by a saved Point (has an id) has somewhere to
+          // persist a drag to — an ephemeral result like a distance endpoint
+          // just isn't draggable.
+          const marker = L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "📍"), draggable: Boolean(p.id) })
+            .addTo(layer)
+            .bindPopup(p.address ? `${p.label}<br>${p.address}` : p.label)
+            .on("click", () => onPointPress?.(p));
+          if (p.id) {
+            marker.on("dragend", () => {
+              const { lat, lng } = marker.getLatLng();
+              onPointDragEnd?.(p, lat, lng);
+            });
+          }
+        });
+      }
 
       if (pendingMarker) {
         L.marker([pendingMarker.lat, pendingMarker.lon], { icon: emojiIcon(L, "📌") }).addTo(layer);
@@ -189,7 +206,7 @@ export default function MapCanvas({
         ).addTo(layer);
       }
     });
-  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress, onPointDragEnd]);
+  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress, onPointDragEnd, shouldShowPins]);
 
   // Fits once, the first time there's anything to show — not on every
   // subsequent points/regions change, since refreshing the same points

@@ -19,6 +19,16 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
+  // switch) — defaults to shown.
+  showPins?: boolean;
+  // Below this zoom level, point markers are hidden regardless of showPins —
+  // a large saved collection is unreadable as a wall of overlapping emoji
+  // once zoomed out to a whole state or country, so pins only appear once
+  // zoomed in close enough to tell them apart. Undefined (the default, used
+  // by the small inline map card in chat) means no such limit — a freshly
+  // found result should always be visible right away.
+  minPinZoom?: number;
   // Bump this (e.g. a counter) when the camera should re-fit to the current
   // points/regions — a brand new AI result arriving, say. Without an
   // explicit signal like this, the map would have to guess "did the point
@@ -42,6 +52,14 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// react-native-maps reports the camera as a lat/lon delta, not a zoom level
+// — this is the standard web-mercator conversion (delta 360 = the whole
+// world = zoom 0), close enough to Leaflet's zoom scale to compare against
+// the same minPinZoom value on both platforms.
+function zoomFromLongitudeDelta(delta: number): number {
+  return Math.log2(360 / delta);
+}
+
 // Native map (iOS/Android) — react-native-maps defaults to Apple Maps on
 // iOS via PROVIDER_DEFAULT, so no API key is needed there.
 export default function MapCanvas({
@@ -56,11 +74,17 @@ export default function MapCanvas({
   pendingMarker,
   showRadar,
   showTimezoneBands,
+  showPins = true,
+  minPinZoom,
   focusKey,
 }: MapCanvasProps) {
   const mapRef = useRef<MapView>(null);
   const hasFitInitially = useRef(false);
   const [radarTemplate, setRadarTemplate] = useState<string | null>(null);
+  const [currentZoom, setCurrentZoom] = useState(() =>
+    zoomFromLongitudeDelta(initialRegion ? 0.1 : DEFAULT_REGION.longitudeDelta)
+  );
+  const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
 
   useEffect(() => {
     if (!showRadar) {
@@ -130,6 +154,7 @@ export default function MapCanvas({
           : DEFAULT_REGION
       }
       onPress={(e) => onMapPress?.(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
+      onRegionChangeComplete={(region) => setCurrentZoom(zoomFromLongitudeDelta(region.longitudeDelta))}
     >
       {radarTemplate ? (
         // RainViewer's radar tiles only actually exist up to zoom 7 — past
@@ -175,25 +200,27 @@ export default function MapCanvas({
         ));
       })}
 
-      {points.map((p, i) => (
-        <Marker
-          key={i}
-          coordinate={{ latitude: p.lat, longitude: p.lon }}
-          onPress={() => onPointPress?.(p)}
-          tracksViewChanges={false}
-          // Only a point backed by a saved Point (has an id) has somewhere
-          // to persist a drag to — an ephemeral result like a distance
-          // endpoint just isn't draggable.
-          draggable={Boolean(p.id)}
-          onDragEnd={(e) =>
-            onPointDragEnd?.(p, e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)
-          }
-        >
-          <View style={styles.markerBubble}>
-            <Text style={styles.markerEmoji}>{p.icon ?? "📍"}</Text>
-          </View>
-        </Marker>
-      ))}
+      {shouldShowPins
+        ? points.map((p, i) => (
+            <Marker
+              key={i}
+              coordinate={{ latitude: p.lat, longitude: p.lon }}
+              onPress={() => onPointPress?.(p)}
+              tracksViewChanges={false}
+              // Only a point backed by a saved Point (has an id) has somewhere
+              // to persist a drag to — an ephemeral result like a distance
+              // endpoint just isn't draggable.
+              draggable={Boolean(p.id)}
+              onDragEnd={(e) =>
+                onPointDragEnd?.(p, e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)
+              }
+            >
+              <View style={styles.markerBubble}>
+                <Text style={styles.markerEmoji}>{p.icon ?? "📍"}</Text>
+              </View>
+            </Marker>
+          ))
+        : null}
 
       {pendingMarker ? (
         <Marker coordinate={{ latitude: pendingMarker.lat, longitude: pendingMarker.lon }} pinColor="#e67e22" />
