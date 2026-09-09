@@ -455,6 +455,7 @@ export async function getGeminiReply(params: {
       provider: "gemini",
       providerNote: null,
       mapData: null,
+      toolsUsed: [],
     };
   }
 
@@ -468,6 +469,7 @@ export async function getGeminiReply(params: {
 
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let mapData: MapData | null = null;
+  const toolsUsed = new Set<string>();
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const res = await fetch(`${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
@@ -525,10 +527,12 @@ export async function getGeminiReply(params: {
         provider: "gemini",
         providerNote: null,
         mapData,
+        toolsUsed: [...toolsUsed],
       };
     }
 
     contents.push({ role: "model", parts });
+    toolsUsed.add(functionCallPart.functionCall.name);
     const { result, mapData: toolMapData } = await executeTool(functionCallPart.functionCall);
     if (toolMapData) mapData = toolMapData;
     contents.push({
@@ -555,5 +559,6 @@ export async function getGeminiReply(params: {
     provider: "gemini",
     providerNote: null,
     mapData,
+    toolsUsed: [...toolsUsed],
   };
 }

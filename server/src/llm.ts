@@ -103,6 +103,11 @@ export interface ChatResult {
   // client already knows why in that case, this covers the case it doesn't.
   providerNote: string | null;
   mapData: MapData | null;
+  // Names of every tool actually called while producing this reply (e.g.
+  // "search_wikipedia", "get_weather") — lets the client show a collapsed
+  // "API used" marker instead of having the model narrate its own sourcing
+  // in the reply text.
+  toolsUsed: string[];
 }
 
 class GroqRateLimitError extends Error {
@@ -544,6 +549,7 @@ export async function getAssistantReply(params: {
       provider: null,
       providerNote: null,
       mapData: null,
+      toolsUsed: [],
     };
   }
 
@@ -556,8 +562,8 @@ export async function getAssistantReply(params: {
   const systemPrompt = [
     `You are ${params.assistantName}, a helpful personal assistant.`,
     "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
-    "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
-    "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map, so mention that naturally.",
+    "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about. Don't narrate that you used a tool or which source you checked — the app shows that separately, so just answer directly.",
+    "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map.",
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
@@ -606,6 +612,7 @@ export async function getAssistantReply(params: {
     let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let rateLimit: DailyRateLimit | null = null;
     let mapData: MapData | null = null;
+    const toolsUsed = new Set<string>();
 
     if (offerThinkingTool) {
       const check = await checkDifficulty(apiKey, params.message);
@@ -628,6 +635,7 @@ export async function getAssistantReply(params: {
           provider: null,
           providerNote: null,
           mapData: null,
+          toolsUsed: [],
         };
       }
     }
@@ -717,11 +725,13 @@ export async function getAssistantReply(params: {
           provider: "groq",
           providerNote: null,
           mapData: mapData ?? regionsFromReply(reply),
+          toolsUsed: [...toolsUsed],
         };
       }
 
       messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
       for (const call of message.tool_calls) {
+        toolsUsed.add(call.function.name);
         const { result, mapData: toolMapData } = await executeTool(call);
         if (toolMapData) mapData = toolMapData;
         messages.push({
@@ -743,6 +753,7 @@ export async function getAssistantReply(params: {
       provider: "groq",
       providerNote: null,
       mapData,
+      toolsUsed: [...toolsUsed],
     };
   } catch (err) {
     if (!(err instanceof GroqRateLimitError)) {

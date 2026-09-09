@@ -23,11 +23,13 @@ import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
 import RingChart from "../components/RingChart";
 import InlineMapCard from "../components/InlineMapCard";
+import ApiUsedBadge from "../components/ApiUsedBadge";
 
 interface Message {
   from: "you" | "assistant" | "system";
   text: string;
   mapData?: MapData | null;
+  toolsUsed?: string[];
 }
 
 interface UsageState {
@@ -99,7 +101,12 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
       .getMessages(baseUrl, token)
       .then(({ messages: stored }) => {
         setMessages(
-          stored.map((m) => ({ from: m.role === "user" ? "you" : "assistant", text: m.content, mapData: m.mapData }))
+          stored.map((m) => ({
+            from: m.role === "user" ? "you" : "assistant",
+            text: m.content,
+            mapData: m.mapData,
+            toolsUsed: m.toolsUsed,
+          }))
         );
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load conversation"))
@@ -127,7 +134,10 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
     if (result.provider) setLastProvider(result.provider);
     if (result.mapData) onMapData(result.mapData);
 
-    setMessages((prev) => [...prev, { from: "assistant", text: result.reply!, mapData: result.mapData }]);
+    setMessages((prev) => [
+      ...prev,
+      { from: "assistant", text: result.reply!, mapData: result.mapData, toolsUsed: result.toolsUsed },
+    ]);
     if (!muted) speak(result.reply!);
 
     if (result.usage) {
@@ -333,6 +343,7 @@ export default function HomeScreen({ onMapData, verifySignal }: HomeScreenProps)
             {m.mapData ? (
               <InlineMapCard mapData={m.mapData} onVerifyMap={() => sendMessage("Verify the map")} />
             ) : null}
+            {m.from === "assistant" && m.toolsUsed?.length ? <ApiUsedBadge toolsUsed={m.toolsUsed} /> : null}
           </View>
         ))}
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}

@@ -46,11 +46,19 @@ async function saveChatMessage(
   userId: string,
   role: "user" | "assistant",
   content: string,
-  mapData?: MapData | null
+  mapData?: MapData | null,
+  toolsUsed?: string[]
 ) {
   await db.execute({
-    sql: "INSERT INTO chat_messages (id, user_id, role, content, map_data_json) VALUES (?, ?, ?, ?, ?)",
-    args: [randomUUID(), userId, role, content, mapData ? JSON.stringify(mapData) : null],
+    sql: "INSERT INTO chat_messages (id, user_id, role, content, map_data_json, tools_used_json) VALUES (?, ?, ?, ?, ?, ?)",
+    args: [
+      randomUUID(),
+      userId,
+      role,
+      content,
+      mapData ? JSON.stringify(mapData) : null,
+      toolsUsed && toolsUsed.length > 0 ? JSON.stringify(toolsUsed) : null,
+    ],
   });
 }
 
@@ -133,6 +141,7 @@ assistantRouter.get("/messages", async (req: AuthedRequest, res) => {
       content: r.content,
       createdAt: r.created_at,
       mapData: r.map_data_json ? JSON.parse(r.map_data_json) : null,
+      toolsUsed: r.tools_used_json ? JSON.parse(r.tools_used_json) : [],
     })),
   });
 });
@@ -166,7 +175,7 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
     // picks yes/no, and that follow-up call is what actually gets saved.
     if (!result.thinkingRequest) {
       await saveChatMessage(req.userId!, "user", parsed.data.message);
-      await saveChatMessage(req.userId!, "assistant", result.reply!, result.mapData);
+      await saveChatMessage(req.userId!, "assistant", result.reply!, result.mapData, result.toolsUsed);
       await backupMapData(req.userId!, result.mapData);
     }
 

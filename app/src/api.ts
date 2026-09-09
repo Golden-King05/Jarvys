@@ -66,6 +66,7 @@ export interface ChatResponse {
   provider: Provider | null;
   providerNote: string | null;
   mapData: MapData | null;
+  toolsUsed: string[];
 }
 
 export interface StoredMessage {
@@ -73,6 +74,7 @@ export interface StoredMessage {
   content: string;
   createdAt: string;
   mapData: MapData | null;
+  toolsUsed: string[];
 }
 
 // A saved pin — user-placed, imported from a URL, or auto-backed-up from
