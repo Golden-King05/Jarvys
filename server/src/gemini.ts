@@ -4,7 +4,7 @@ import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } fro
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
-import { findArticlesInArea, searchWikipedia } from "./wikipedia.js";
+import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-3.8-flash";
@@ -163,13 +163,25 @@ const SEARCH_WIKIPEDIA_TOOL = {
     {
       name: "find_saved_point",
       description:
-        "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. Returns up to 5 matches, or an empty list if nothing matches.",
+        "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. A match's 'urls' list may include a Wikipedia link even when its 'blurb' is empty or thin — if so, call get_wikipedia_article with that exact URL to get real content instead of guessing. Returns up to 5 matches, or an empty list if nothing matches.",
       parameters: {
         type: "object",
         properties: {
           query: { type: "string", description: "The place name to look for among the user's saved points." },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "get_wikipedia_article",
+      description:
+        "Fetch a specific Wikipedia article by its exact URL or title — use this instead of search_wikipedia whenever you already know precisely which article you want, e.g. a Wikipedia URL returned by find_saved_point, or a link the user gave you directly. More reliable than a keyword search when you already have the exact title or URL.",
+      parameters: {
+        type: "object",
+        properties: {
+          urlOrTitle: { type: "string", description: "A Wikipedia article URL, or its exact title." },
+        },
+        required: ["urlOrTitle"],
       },
     },
     {
@@ -327,6 +339,16 @@ async function executeTool(
         ],
       },
     };
+  }
+
+  if (call.name === "get_wikipedia_article") {
+    const urlOrTitle = args.urlOrTitle;
+    if (typeof urlOrTitle !== "string" || !urlOrTitle) {
+      return { result: { error: "Missing required 'urlOrTitle' argument" }, mapData: null };
+    }
+    const title = wikipediaTitleFromUrl(urlOrTitle) ?? urlOrTitle;
+    const result = await getWikipediaByTitle(title);
+    return { result, mapData: null };
   }
 
   if (call.name === "find_places") {

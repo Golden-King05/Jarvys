@@ -4,7 +4,7 @@ import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } fro
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions } from "./weather.js";
-import { findArticlesInArea, searchWikipedia } from "./wikipedia.js";
+import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 // openai/gpt-oss-120b was the earlier default but has a documented issue
@@ -308,13 +308,29 @@ const FIND_SAVED_POINT_TOOL = {
   function: {
     name: "find_saved_point",
     description:
-      "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. Returns up to 5 matches, or an empty list if nothing matches.",
+      "Search the user's own saved map points by name. Call this before answering a factual question about a specific real-world place, so you can use their saved note as your source and mention it's already on their map instead of searching elsewhere — and before calling propose_map_point, to avoid suggesting a duplicate of something already saved. A match's 'urls' list may include a Wikipedia link even when its 'blurb' is empty or thin — if so, call get_wikipedia_article with that exact URL to get real content instead of guessing. Returns up to 5 matches, or an empty list if nothing matches.",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string", description: "The place name to look for among the user's saved points." },
       },
       required: ["query"],
+    },
+  },
+};
+
+const GET_WIKIPEDIA_ARTICLE_TOOL = {
+  type: "function",
+  function: {
+    name: "get_wikipedia_article",
+    description:
+      "Fetch a specific Wikipedia article by its exact URL or title — use this instead of search_wikipedia whenever you already know precisely which article you want, e.g. a Wikipedia URL returned by find_saved_point, or a link the user gave you directly. More reliable than a keyword search when you already have the exact title or URL.",
+    parameters: {
+      type: "object",
+      properties: {
+        urlOrTitle: { type: "string", description: "A Wikipedia article URL, or its exact title." },
+      },
+      required: ["urlOrTitle"],
     },
   },
 };
@@ -444,6 +460,18 @@ async function executeTool(call: ToolCall, userId: string): Promise<{ result: un
         ],
       },
     };
+  }
+
+  if (name === "get_wikipedia_article") {
+    if (typeof args.urlOrTitle !== "string" || !args.urlOrTitle) {
+      return { result: { error: "Missing required 'urlOrTitle' argument" }, mapData: null };
+    }
+    const title = wikipediaTitleFromUrl(args.urlOrTitle) ?? args.urlOrTitle;
+    const result = await getWikipediaByTitle(title);
+    // No mapData here — this is for grounding an answer about a place that's
+    // already on the user's map (via find_saved_point), not for dropping a
+    // second, duplicate pin.
+    return { result, mapData: null };
   }
 
   if (name === "find_places") {
@@ -685,7 +713,7 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
     "If the user asks you to write, generate, or create a description for a place — especially one they want added to their map — write it yourself in your own words, then call propose_map_point with that place's name, a location string precise enough to geocode (include the city/state/country), a category, and your description; this only previews the point on their map, it does not save it. In your reply, share the description and explicitly ask whether they'd like it added — never say you've already added it, and never call propose_map_point more than once for the same request. Use search_wikipedia instead for an ordinary factual question that isn't about writing or creating something for the map.",
-    "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate.",
+    "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",
     "If the user asks you to find, locate, or list Wikipedia articles or landmarks across a whole area (a county, city, park — not one specific place), call find_wikipedia_articles_in_area instead of search_wikipedia; it previews every result on their map at once. Mention how many were found and ask if they'd like them added — if the tool result says the area was too large to fully cover, say so rather than implying the list is complete.",
     instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
@@ -800,6 +828,7 @@ async function runGroqPath(params: {
     PROPOSE_MAP_POINT_TOOL,
     FIND_SAVED_POINT_TOOL,
     FIND_WIKIPEDIA_ARTICLES_IN_AREA_TOOL,
+    GET_WIKIPEDIA_ARTICLE_TOOL,
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
