@@ -48,6 +48,21 @@ interface PendingThinking {
 // decide anything.
 const COMPRESSION_THRESHOLD_RATIO = 0.75;
 
+// The system prompt asks the model to avoid markdown, but it doesn't always
+// comply — render **bold** spans properly instead of showing literal
+// asterisks when it slips through.
+function renderFormattedText(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+      <Text key={i} style={styles.bold}>
+        {part.slice(2, -2)}
+      </Text>
+    ) : (
+      part
+    )
+  );
+}
+
 export default function HomeScreen() {
   const { baseUrl, token } = useAuth();
   const [input, setInput] = useState("");
@@ -297,7 +312,7 @@ export default function HomeScreen() {
             style={m.from === "you" ? styles.you : m.from === "system" ? styles.system : styles.assistant}
           >
             {m.from === "you" ? "You: " : ""}
-            {m.text}
+            {renderFormattedText(m.text)}
           </Text>
         ))}
         {busy ? <Text style={styles.placeholder}>Listening...</Text> : null}
@@ -366,6 +381,7 @@ const styles = StyleSheet.create({
   placeholder: { fontFamily: fonts.regular, color: "#888", textAlign: "center", marginTop: 40 },
   you: { fontFamily: fonts.semiBold, marginBottom: 8 },
   assistant: { fontFamily: fonts.regular, marginBottom: 8 },
+  bold: { fontFamily: fonts.semiBold },
   system: { fontFamily: fonts.regular, marginBottom: 8, fontStyle: "italic", color: "#888", fontSize: 12 },
   error: { fontFamily: fonts.regular, color: "#c0392b", paddingHorizontal: 16 },
   usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1, marginLeft: 16 },
