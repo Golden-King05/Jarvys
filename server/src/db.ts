@@ -31,6 +31,7 @@ await db.executeMultiple(`
     assistant_name TEXT NOT NULL DEFAULT 'Jarvys',
     instructions TEXT NOT NULL DEFAULT '',
     preferences_json TEXT NOT NULL DEFAULT '{}',
+    preferred_provider TEXT NOT NULL DEFAULT 'groq',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -89,6 +90,13 @@ for (const column of ["map_data_json", "tools_used_json"]) {
   }
 }
 
+// assistant_settings predates preferred_provider — same deal.
+try {
+  await db.execute("ALTER TABLE assistant_settings ADD COLUMN preferred_provider TEXT NOT NULL DEFAULT 'groq'");
+} catch (err) {
+  if (!(err instanceof Error) || !/duplicate column/i.test(err.message)) throw err;
+}
+
 export async function incrementProviderUsage(provider: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
   await db.execute({
@@ -115,6 +123,7 @@ export interface AssistantSettingsRow {
   assistant_name: string;
   instructions: string;
   preferences_json: string;
+  preferred_provider: string;
   updated_at: string;
 }
 

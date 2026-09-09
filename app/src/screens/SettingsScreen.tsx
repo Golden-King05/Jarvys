@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Button, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { api } from "../api";
+import { ActivityIndicator, Button, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { api, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 
@@ -10,6 +10,7 @@ export default function SettingsScreen() {
   const [saving, setSaving] = useState(false);
   const [assistantName, setAssistantName] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [preferredProvider, setPreferredProvider] = useState<Provider>("groq");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -26,6 +27,7 @@ export default function SettingsScreen() {
       .then((s) => {
         setAssistantName(s.assistantName);
         setInstructions(s.instructions);
+        setPreferredProvider(s.preferredProvider);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load settings"))
       .finally(() => setLoading(false));
@@ -37,7 +39,7 @@ export default function SettingsScreen() {
     setError(null);
     setSaved(false);
     try {
-      await api.updateSettings(baseUrl, token, { assistantName, instructions });
+      await api.updateSettings(baseUrl, token, { assistantName, instructions, preferredProvider });
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
@@ -85,6 +87,31 @@ export default function SettingsScreen() {
         numberOfLines={6}
         placeholder="e.g. Be brief. Prefer bullet points."
       />
+
+      <Text style={styles.label}>Default AI</Text>
+      <Text style={styles.hint}>
+        Groq answers everyday messages instantly for free but is a smaller model; Gemini is a larger, generally
+        higher-quality model. Whichever isn't chosen still steps in automatically as a backup if the other is
+        temporarily down.
+      </Text>
+      <View style={styles.providerRow}>
+        <TouchableOpacity
+          style={[styles.providerChip, preferredProvider === "groq" && styles.providerChipActive]}
+          onPress={() => setPreferredProvider("groq")}
+        >
+          <Text style={[styles.providerChipText, preferredProvider === "groq" && styles.providerChipTextActive]}>
+            Groq
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.providerChip, preferredProvider === "gemini" && styles.providerChipActive]}
+          onPress={() => setPreferredProvider("gemini")}
+        >
+          <Text style={[styles.providerChipText, preferredProvider === "gemini" && styles.providerChipTextActive]}>
+            Gemini
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
       {saved ? <Text style={styles.saved}>Saved — synced to your account.</Text> : null}
@@ -145,6 +172,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   multiline: { minHeight: 100, textAlignVertical: "top" },
+  providerRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  providerChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    backgroundColor: "#fff",
+  },
+  providerChipActive: { backgroundColor: "#222", borderColor: "#222" },
+  providerChipText: { fontFamily: fonts.medium, fontSize: 13, color: "#444" },
+  providerChipTextActive: { color: "#fff" },
   error: { fontFamily: fonts.regular, color: "#c0392b", marginTop: 12 },
   saved: { fontFamily: fonts.regular, color: "#27ae60", marginTop: 12 },
   spacing: { marginTop: 20 },

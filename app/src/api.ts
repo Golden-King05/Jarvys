@@ -4,6 +4,7 @@ export interface AssistantSettings {
   assistantName: string;
   instructions: string;
   preferences: Record<string, unknown>;
+  preferredProvider: Provider;
   updatedAt: string;
 }
 

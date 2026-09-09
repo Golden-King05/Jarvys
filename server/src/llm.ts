@@ -530,37 +530,9 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-export async function getAssistantReply(params: {
-  assistantName: string;
-  instructions: string;
-  message: string;
-  history: ChatTurn[];
-  forceReasoningEffort?: "default" | "none";
-}): Promise<ChatResult> {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    return {
-      reply: `${params.assistantName}: I heard "${params.message}". (No model wired up yet — set GROQ_API_KEY to enable real replies.)`,
-      usage: null,
-      compressed: false,
-      droppedMessages: 0,
-      rateLimit: null,
-      thinkingRequest: null,
-      provider: null,
-      providerNote: null,
-      mapData: null,
-      toolsUsed: [],
-    };
-  }
-
-  // When the model itself asked to think harder and the user answered yes/no,
-  // the caller re-sends the same message with this set — skip the difficulty
-  // check this time and just run at the chosen reasoning level.
-  const offerThinkingTool = !params.forceReasoningEffort;
-  const reasoningEffort = params.forceReasoningEffort ?? "none";
-
-  const systemPrompt = [
-    `You are ${params.assistantName}, a helpful personal assistant.`,
+function buildSystemPrompt(assistantName: string, instructions: string): string {
+  return [
+    `You are ${assistantName}, a helpful personal assistant.`,
     "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     "Give one direct, confident answer and stop — never think out loud, list multiple candidate answers, or write several paragraphs that each revise or contradict what you just said. Settle on your best answer before responding and state it once.",
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about. Don't narrate that you used a tool or which source you checked — the app shows that separately, so just answer directly.",
@@ -572,34 +544,238 @@ export async function getAssistantReply(params: {
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
     "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
-    params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
+    instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
     .filter(Boolean)
     .join(" ");
+}
 
-  let history = params.history;
+function trimHistory(
+  history: ChatTurn[],
+  systemPrompt: string,
+  message: string
+): { history: ChatTurn[]; droppedMessages: number } {
+  let trimmed = history;
   let droppedMessages = 0;
   const threshold = CONTEXT_WINDOW_TOKENS * COMPRESSION_THRESHOLD_RATIO;
 
   function estimateTotal(h: ChatTurn[]): number {
     return (
       estimateTokens(systemPrompt) +
-      estimateTokens(params.message) +
+      estimateTokens(message) +
       h.reduce((sum, turn) => sum + estimateTokens(turn.content), 0)
     );
   }
 
   // Drop the oldest turns two at a time (a user/assistant pair) to keep the
   // remaining history alternating sensibly.
-  while (history.length > 0 && estimateTotal(history) > threshold) {
-    history = history.slice(2);
+  while (trimmed.length > 0 && estimateTotal(trimmed) > threshold) {
+    trimmed = trimmed.slice(2);
     droppedMessages += 2;
   }
+  return { history: trimmed, droppedMessages };
+}
+
+function blankResult(reply: string, droppedMessages: number): ChatResult {
+  return {
+    reply,
+    usage: null,
+    compressed: droppedMessages > 0,
+    droppedMessages,
+    rateLimit: null,
+    thinkingRequest: null,
+    provider: null,
+    providerNote: null,
+    mapData: null,
+    toolsUsed: [],
+  };
+}
+
+// The actual Groq tool-calling turn — factored out so it can run either as
+// the everyday default or as Gemini's backup when Gemini is the user's
+// chosen default and happens to be down. Throws GroqRateLimitError on a 429
+// so either caller can decide how to fail over.
+async function runGroqPath(params: {
+  apiKey: string;
+  systemPrompt: string;
+  message: string;
+  history: ChatTurn[];
+  droppedMessages: number;
+  offerThinkingTool: boolean;
+}): Promise<ChatResult> {
+  const { apiKey, systemPrompt, message, history, droppedMessages, offerThinkingTool } = params;
+
+  // Ask a narrow yes/no question up front rather than hoping the model
+  // interrupts its own answer to flag difficulty (see checkDifficulty).
+  let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let rateLimit: DailyRateLimit | null = null;
+  let mapData: MapData | null = null;
+  const toolsUsed = new Set<string>();
+
+  if (offerThinkingTool) {
+    const check = await checkDifficulty(apiKey, message);
+    if (check.usage) {
+      usageTotals = {
+        promptTokens: check.usage.promptTokens,
+        completionTokens: check.usage.completionTokens,
+        totalTokens: check.usage.totalTokens,
+      };
+    }
+    rateLimit = check.rateLimit;
+    if (check.thinkingRequest) {
+      return {
+        reply: null,
+        usage: check.usage,
+        compressed: false,
+        droppedMessages: 0,
+        rateLimit,
+        thinkingRequest: check.thinkingRequest,
+        provider: null,
+        providerNote: null,
+        mapData: null,
+        toolsUsed: [],
+      };
+    }
+  }
+
+  const messages: GroqMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...history.map((turn): GroqMessage => ({ role: turn.role, content: turn.content })),
+    { role: "user", content: message },
+  ];
+
+  const tools = [
+    SEARCH_WIKIPEDIA_TOOL,
+    FIND_PLACES_TOOL,
+    CALCULATE_DISTANCE_TOOL,
+    HIGHLIGHT_REGIONS_TOOL,
+    VERIFY_MAP_TOOL,
+    GET_WEATHER_TOOL,
+    GET_LOCAL_TIME_TOOL,
+    CONVERT_CURRENCY_TOOL,
+  ];
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const res = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        tools,
+        tool_choice: "auto",
+        // Qwen3.6 defaults to an extended "thinking" mode that can burn
+        // hundreds of output tokens on even a one-line reply — easily
+        // enough to trip Groq's free-tier output-tokens-per-minute cap
+        // (1,000/min) after just one or two messages. "none" is documented
+        // as the mode for general-purpose dialogue. Approved deep-thinking
+        // requests never reach this call at all — they're routed to Gemini
+        // above, since Groq's ~900-token reply ceiling (declaring more gets
+        // rejected outright regardless of mode) leaves no room for both
+        // extended reasoning and a full answer.
+        reasoning_effort: "none",
+        max_completion_tokens: 900,
+      }),
+    });
+
+    if (res.status === 429) {
+      throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"), readRetryAfter(res));
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Groq request failed (${res.status}): ${detail}`);
+    }
+
+    const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
+    const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
+    if (limitRequestsHeader && remainingRequestsHeader) {
+      rateLimit = {
+        limitRequests: Number(limitRequestsHeader),
+        remainingRequests: Number(remainingRequestsHeader),
+      };
+    }
+
+    const data = (await res.json()) as GroqChatResponse;
+    if (data.usage) {
+      usageTotals = {
+        promptTokens: usageTotals.promptTokens + data.usage.prompt_tokens,
+        completionTokens: usageTotals.completionTokens + data.usage.completion_tokens,
+        totalTokens: usageTotals.totalTokens + data.usage.total_tokens,
+      };
+    }
+
+    const responseMessage = data.choices[0]?.message;
+    const usage: ChatUsage | null =
+      usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null;
+
+    if (!responseMessage?.tool_calls || responseMessage.tool_calls.length === 0) {
+      const reply = responseMessage?.content?.trim() ? responseMessage.content : "(empty response from model)";
+      return {
+        reply,
+        usage,
+        compressed: droppedMessages > 0,
+        droppedMessages,
+        rateLimit,
+        thinkingRequest: null,
+        provider: "groq",
+        providerNote: null,
+        mapData: mapData ?? regionsFromReply(reply),
+        toolsUsed: [...toolsUsed],
+      };
+    }
+
+    messages.push({ role: "assistant", content: responseMessage.content, tool_calls: responseMessage.tool_calls });
+    for (const call of responseMessage.tool_calls) {
+      toolsUsed.add(call.function.name);
+      const { result, mapData: toolMapData } = await executeTool(call);
+      if (toolMapData) mapData = toolMapData;
+      messages.push({
+        role: "tool",
+        tool_call_id: call.id,
+        name: call.function.name,
+        content: JSON.stringify(result),
+      });
+    }
+  }
+
+  return {
+    reply: "I was looking into that but couldn't wrap it up — could you try asking again?",
+    usage: usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null,
+    compressed: droppedMessages > 0,
+    droppedMessages,
+    rateLimit,
+    thinkingRequest: null,
+    provider: "groq",
+    providerNote: null,
+    mapData,
+    toolsUsed: [...toolsUsed],
+  };
+}
+
+export async function getAssistantReply(params: {
+  assistantName: string;
+  instructions: string;
+  message: string;
+  history: ChatTurn[];
+  forceReasoningEffort?: "default" | "none";
+  // Which provider handles everyday chat for this user — set in Settings.
+  // Defaults to "groq". The other provider is still used as an automatic
+  // backup if the preferred one is down, regardless of which is preferred.
+  preferredProvider?: Provider;
+}): Promise<ChatResult> {
+  const groqKey = process.env.GROQ_API_KEY;
+  const preferred = params.preferredProvider ?? "groq";
+
+  const systemPrompt = buildSystemPrompt(params.assistantName, params.instructions);
+  const { history, droppedMessages } = trimHistory(params.history, systemPrompt, params.message);
 
   // The user already approved deep thinking (a prior call's checkDifficulty
   // returned a thinkingRequest and they clicked yes) — hand this one to
-  // Gemini instead of Groq. See getGeminiReply for why.
-  if (reasoningEffort === "default") {
+  // Gemini regardless of the preferred provider. See getGeminiReply for why.
+  if (params.forceReasoningEffort === "default") {
     const result = await getGeminiReply({
       systemPrompt,
       message: params.message,
@@ -610,155 +786,60 @@ export async function getAssistantReply(params: {
     return { ...result, provider: "gemini", providerNote: null };
   }
 
-  try {
-    // Ask a narrow yes/no question up front rather than hoping the model
-    // interrupts its own answer to flag difficulty (see checkDifficulty).
-    let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    let rateLimit: DailyRateLimit | null = null;
-    let mapData: MapData | null = null;
-    const toolsUsed = new Set<string>();
-
-    if (offerThinkingTool) {
-      const check = await checkDifficulty(apiKey, params.message);
-      if (check.usage) {
-        usageTotals = {
-          promptTokens: check.usage.promptTokens,
-          completionTokens: check.usage.completionTokens,
-          totalTokens: check.usage.totalTokens,
-        };
-      }
-      rateLimit = check.rateLimit;
-      if (check.thinkingRequest) {
-        return {
-          reply: null,
-          usage: check.usage,
-          compressed: false,
-          droppedMessages: 0,
-          rateLimit,
-          thinkingRequest: check.thinkingRequest,
-          provider: null,
-          providerNote: null,
-          mapData: null,
-          toolsUsed: [],
-        };
-      }
-    }
-
-    const messages: GroqMessage[] = [
-      { role: "system", content: systemPrompt },
-      ...history.map((turn): GroqMessage => ({ role: turn.role, content: turn.content })),
-      { role: "user", content: params.message },
-    ];
-
-    const tools = [
-      SEARCH_WIKIPEDIA_TOOL,
-      FIND_PLACES_TOOL,
-      CALCULATE_DISTANCE_TOOL,
-      HIGHLIGHT_REGIONS_TOOL,
-      VERIFY_MAP_TOOL,
-      GET_WEATHER_TOOL,
-      GET_LOCAL_TIME_TOOL,
-      CONVERT_CURRENCY_TOOL,
-    ];
-
-    for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-      const res = await fetch(GROQ_API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages,
-          tools,
-          tool_choice: "auto",
-          // Qwen3.6 defaults to an extended "thinking" mode that can burn
-          // hundreds of output tokens on even a one-line reply — easily
-          // enough to trip Groq's free-tier output-tokens-per-minute cap
-          // (1,000/min) after just one or two messages. "none" is documented
-          // as the mode for general-purpose dialogue. Approved deep-thinking
-          // requests never reach this call at all — they're routed to Gemini
-          // above, since Groq's ~900-token reply ceiling (declaring more gets
-          // rejected outright regardless of mode) leaves no room for both
-          // extended reasoning and a full answer.
-          reasoning_effort: "none",
-          max_completion_tokens: 900,
-        }),
+  if (preferred === "gemini") {
+    try {
+      const result = await getGeminiReply({
+        systemPrompt,
+        message: params.message,
+        history,
+        droppedMessages,
+        thinking: false,
       });
-
-      if (res.status === 429) {
-        throw new GroqRateLimitError(await res.text().catch(() => "Groq rate limit"), readRetryAfter(res));
+      return { ...result, provider: "gemini", providerNote: null };
+    } catch (err) {
+      if (!groqKey) {
+        return blankResult(
+          "Gemini (your default) is unavailable right now, and no backup model is configured.",
+          droppedMessages
+        );
       }
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new Error(`Groq request failed (${res.status}): ${detail}`);
-      }
-
-      const limitRequestsHeader = res.headers.get("x-ratelimit-limit-requests");
-      const remainingRequestsHeader = res.headers.get("x-ratelimit-remaining-requests");
-      if (limitRequestsHeader && remainingRequestsHeader) {
-        rateLimit = {
-          limitRequests: Number(limitRequestsHeader),
-          remainingRequests: Number(remainingRequestsHeader),
-        };
-      }
-
-      const data = (await res.json()) as GroqChatResponse;
-      if (data.usage) {
-        usageTotals = {
-          promptTokens: usageTotals.promptTokens + data.usage.prompt_tokens,
-          completionTokens: usageTotals.completionTokens + data.usage.completion_tokens,
-          totalTokens: usageTotals.totalTokens + data.usage.total_tokens,
-        };
-      }
-
-      const message = data.choices[0]?.message;
-      const usage: ChatUsage | null =
-        usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null;
-
-      if (!message?.tool_calls || message.tool_calls.length === 0) {
-        const reply = message?.content?.trim() ? message.content : "(empty response from model)";
-        return {
-          reply,
-          usage,
-          compressed: droppedMessages > 0,
+      try {
+        const result = await runGroqPath({
+          apiKey: groqKey,
+          systemPrompt,
+          message: params.message,
+          history,
           droppedMessages,
-          rateLimit,
-          thinkingRequest: null,
-          provider: "groq",
-          providerNote: null,
-          mapData: mapData ?? regionsFromReply(reply),
-          toolsUsed: [...toolsUsed],
-        };
-      }
-
-      messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
-      for (const call of message.tool_calls) {
-        toolsUsed.add(call.function.name);
-        const { result, mapData: toolMapData } = await executeTool(call);
-        if (toolMapData) mapData = toolMapData;
-        messages.push({
-          role: "tool",
-          tool_call_id: call.id,
-          name: call.function.name,
-          content: JSON.stringify(result),
+          offerThinkingTool: false,
         });
+        return { ...result, providerNote: "Gemini (your default) was unavailable, so this reply came from Groq instead." };
+      } catch (groqErr) {
+        if (!(groqErr instanceof GroqRateLimitError)) throw groqErr;
+        return blankResult(
+          "Gemini (your default) is unavailable, and Groq — its backup — has also hit its limit right now. Please try again in a moment.",
+          droppedMessages
+        );
       }
     }
+  }
 
-    return {
-      reply: "I was looking into that but couldn't wrap it up — could you try asking again?",
-      usage: usageTotals.totalTokens > 0 ? { ...usageTotals, contextWindow: CONTEXT_WINDOW_TOKENS } : null,
-      compressed: droppedMessages > 0,
+  // preferred === "groq" (the original, default behavior).
+  if (!groqKey) {
+    return blankResult(
+      `${params.assistantName}: I heard "${params.message}". (No model wired up yet — set GROQ_API_KEY to enable real replies.)`,
+      0
+    );
+  }
+
+  try {
+    return await runGroqPath({
+      apiKey: groqKey,
+      systemPrompt,
+      message: params.message,
+      history,
       droppedMessages,
-      rateLimit,
-      thinkingRequest: null,
-      provider: "groq",
-      providerNote: null,
-      mapData,
-      toolsUsed: [...toolsUsed],
-    };
+      offerThinkingTool: !params.forceReasoningEffort,
+    });
   } catch (err) {
     if (!(err instanceof GroqRateLimitError)) {
       throw err;
@@ -786,18 +867,10 @@ export async function getAssistantReply(params: {
       // transiently overloaded right when Groq needed backup), but dumping
       // that raw error into the chat isn't useful — a plain, honest message
       // beats a stack of JSON.
-      return {
-        reply: `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`,
-        usage: null,
-        compressed: droppedMessages > 0,
-        droppedMessages,
-        rateLimit: null,
-        thinkingRequest: null,
-        provider: null,
-        providerNote: null,
-        mapData: null,
-        toolsUsed: [],
-      };
+      return blankResult(
+        `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`,
+        droppedMessages
+      );
     }
   }
 }

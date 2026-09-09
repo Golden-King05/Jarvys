@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { db, saveMapPointsFromSearch, type AssistantSettingsRow, type ChatMessageRow } from "../db.js";
-import { getAssistantReply, transcribeAudio, type MapData } from "../llm.js";
+import { getAssistantReply, transcribeAudio, type MapData, type Provider } from "../llm.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 
 // How much of the account's stored chat log to load per request. This bounds
@@ -18,6 +18,7 @@ function toApiSettings(row: AssistantSettingsRow) {
     assistantName: row.assistant_name,
     instructions: row.instructions,
     preferences: JSON.parse(row.preferences_json),
+    preferredProvider: row.preferred_provider as Provider,
     updatedAt: row.updated_at,
   };
 }
@@ -99,6 +100,7 @@ const settingsSchema = z.object({
   assistantName: z.string().min(1).max(80).optional(),
   instructions: z.string().max(4000).optional(),
   preferences: z.record(z.unknown()).optional(),
+  preferredProvider: z.enum(["groq", "gemini"]).optional(),
 });
 
 assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
@@ -118,13 +120,14 @@ assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
     preferences_json: parsed.data.preferences
       ? JSON.stringify(parsed.data.preferences)
       : current.preferences_json,
+    preferred_provider: parsed.data.preferredProvider ?? current.preferred_provider,
   };
 
   await db.execute({
     sql: `UPDATE assistant_settings
-          SET assistant_name = ?, instructions = ?, preferences_json = ?, updated_at = datetime('now')
+          SET assistant_name = ?, instructions = ?, preferences_json = ?, preferred_provider = ?, updated_at = datetime('now')
           WHERE user_id = ?`,
-    args: [next.assistant_name, next.instructions, next.preferences_json, req.userId!],
+    args: [next.assistant_name, next.instructions, next.preferences_json, next.preferred_provider, req.userId!],
   });
 
   const updated = await getSettingsRow(req.userId!);
@@ -167,6 +170,7 @@ assistantRouter.post("/chat", async (req: AuthedRequest, res) => {
       message: parsed.data.message,
       history: historyRows.map((r) => ({ role: r.role, content: r.content })),
       forceReasoningEffort: parsed.data.forceReasoningEffort,
+      preferredProvider: row!.preferred_provider as Provider,
     });
 
     // A thinkingRequest means the model wants to ask before it answers —
