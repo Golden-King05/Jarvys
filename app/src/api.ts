@@ -154,19 +154,41 @@ export interface ImportPointFromUrl {
 
 export type ImportPointResult = { needsLocation: true; name: string } | { needsLocation: false; point: Point };
 
+// Render's free tier spins the server down when idle and takes up to ~50s
+// to cold-start the next request — comfortably longer than a browser's own
+// default network timeout, which surfaces as an opaque "Load failed" with
+// no indication of what actually happened. An explicit timeout here lets us
+// show a clear, actionable message instead for that case, and for a plain
+// network drop (fetch throws a TypeError with no HTTP response at all).
+const REQUEST_TIMEOUT_MS = 55000;
+
 async function request<T>(
   baseUrl: string,
   path: string,
   options: { method?: string; token?: string; body?: unknown } = {}
 ): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: options.method ?? "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path}`, {
+      method: options.method ?? "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new ApiError("The server is taking a while to respond (it may be waking up) — please try again.");
+    }
+    throw new ApiError("Couldn't reach the server — check your connection and try again.");
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

@@ -139,9 +139,24 @@ export default function MapCanvas({
       if (cancelled || !containerRef.current || mapInstance.current) return;
       const center = initialRegion ? [initialRegion.latitude, initialRegion.longitude] : DEFAULT_CENTER;
       const map = L.map(containerRef.current).setView(center, initialRegion ? 12 : 4);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      const baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(map);
+      // A tile that fails to load (a transient network blip, a momentarily
+      // overloaded OSM server) otherwise just stays blank forever on a small
+      // preview card the user never pans — nothing else would ever re-request
+      // it. A couple of delayed retries usually recovers it.
+      const tileRetries = new WeakMap<object, number>();
+      baseLayer.on("tileerror", (e: { tile: HTMLImageElement; coords: object }) => {
+        const attempt = tileRetries.get(e.coords) ?? 0;
+        if (attempt >= 3) return;
+        tileRetries.set(e.coords, attempt + 1);
+        const src = e.tile.src;
+        setTimeout(() => {
+          e.tile.src = "";
+          e.tile.src = src;
+        }, 1500 * (attempt + 1));
+      });
       map.on("click", (e: { latlng: { lat: number; lng: number } }) => {
         onMapPressRef.current?.(e.latlng.lat, e.latlng.lng);
       });
