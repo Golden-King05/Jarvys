@@ -82,7 +82,7 @@ export interface BoundingBox {
 // anonymous OpenSky access has a modest daily credit budget).
 const MAX_BBOX_DEGREES = 5;
 
-export async function getFlightsInBoundingBox(box: BoundingBox): Promise<Flight[] | { error: string }> {
+async function getFlightsFromOpenSky(box: BoundingBox): Promise<Flight[] | { error: string }> {
   const south = Math.max(box.south, box.north - MAX_BBOX_DEGREES);
   const west = Math.max(box.west, box.east - MAX_BBOX_DEGREES);
 
@@ -104,14 +104,14 @@ export async function getFlightsInBoundingBox(box: BoundingBox): Promise<Flight[
     // connection from stalling the request indefinitely either.
     const res = await fetch(`${OPENSKY_STATES_URL}?${params}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) {
-      return { error: `Flight lookup failed (${res.status})` };
+      return { error: `OpenSky lookup failed (${res.status})` };
     }
     data = (await res.json()) as OpenSkyResponse;
   } catch (err) {
-    return { error: `Flight lookup failed: ${err instanceof Error ? err.message : "network error"}` };
+    return { error: `OpenSky lookup failed: ${err instanceof Error ? err.message : "network error"}` };
   }
   if (!data.states) return [];
 
@@ -139,6 +139,121 @@ export async function getFlightsInBoundingBox(box: BoundingBox): Promise<Flight[
       },
     ];
   });
+}
+
+// Free, keyless community mirrors of ADS-B Exchange-style data — used as an
+// automatic fallback when OpenSky is unreachable (e.g. it blocks traffic
+// from cloud-host IP ranges like Render's, confirmed by OpenSky timing out
+// consistently from production while every other external API this server
+// calls works fine). Both expose a "point + radius" query rather than a
+// bounding box, so the box is converted to a center point and a covering
+// radius. Tried in order; adsb.fi is a second independent mirror in case
+// adsb.lol is ever down or also blocked.
+// Both mirrors reject requests without a descriptive User-Agent (a generic
+// one gets a 403 with "User-Agent too generic; include valid contact info").
+const ADSB_USER_AGENT = "JarvysApp/1.0 (personal assistant app; contact: theultimategoldenking@gmail.com)";
+
+const ADSB_MIRRORS = [
+  {
+    name: "adsb.lol",
+    aircraftKey: "ac" as const,
+    buildUrl: (lat: number, lon: number, radiusNm: number) =>
+      `https://api.adsb.lol/v2/point/${lat}/${lon}/${radiusNm}`,
+  },
+  {
+    name: "adsb.fi",
+    aircraftKey: "aircraft" as const,
+    buildUrl: (lat: number, lon: number, radiusNm: number) =>
+      `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${radiusNm}`,
+  },
+];
+
+const EARTH_RADIUS_NM = 3440.065;
+const MAX_MIRROR_RADIUS_NM = 250;
+
+function haversineNm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return EARTH_RADIUS_NM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function bboxToPointRadius(box: BoundingBox): { lat: number; lon: number; radiusNm: number } {
+  const south = Math.max(box.south, box.north - MAX_BBOX_DEGREES);
+  const west = Math.max(box.west, box.east - MAX_BBOX_DEGREES);
+  const lat = (south + box.north) / 2;
+  const lon = (west + box.east) / 2;
+  const radiusNm = Math.min(
+    MAX_MIRROR_RADIUS_NM,
+    Math.max(haversineNm(lat, lon, box.north, box.east), haversineNm(lat, lon, south, west))
+  );
+  return { lat, lon, radiusNm };
+}
+
+interface AdsbAircraft {
+  hex: string;
+  flight?: string;
+  lat?: number;
+  lon?: number;
+  alt_baro?: number | "ground";
+  gs?: number;
+  track?: number;
+  baro_rate?: number;
+}
+
+async function getFlightsFromAdsbMirror(
+  mirror: (typeof ADSB_MIRRORS)[number],
+  box: BoundingBox
+): Promise<Flight[] | { error: string }> {
+  const { lat, lon, radiusNm } = bboxToPointRadius(box);
+  try {
+    const res = await fetch(mirror.buildUrl(lat, lon, Math.round(radiusNm)), {
+      headers: { "User-Agent": ADSB_USER_AGENT },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) {
+      return { error: `${mirror.name} lookup failed (${res.status})` };
+    }
+    const data = (await res.json()) as Record<string, AdsbAircraft[] | undefined>;
+    const aircraft = data[mirror.aircraftKey] ?? [];
+    return aircraft.flatMap((a) => {
+      if (a.lat == null || a.lon == null) return [];
+      const onGround = a.alt_baro === "ground";
+      return [
+        {
+          icao24: a.hex,
+          callsign: (a.flight ?? "").trim() || "Unknown",
+          originCountry: "",
+          lat: a.lat,
+          lon: a.lon,
+          altitudeFt: !onGround && typeof a.alt_baro === "number" ? Math.round(a.alt_baro) : null,
+          velocityMph: a.gs != null ? Math.round(a.gs * 1.15078) : null,
+          headingDeg: a.track ?? null,
+          verticalRateFtMin: a.baro_rate ?? null,
+          onGround,
+        },
+      ];
+    });
+  } catch (err) {
+    return { error: `${mirror.name} lookup failed: ${err instanceof Error ? err.message : "network error"}` };
+  }
+}
+
+export async function getFlightsInBoundingBox(box: BoundingBox): Promise<Flight[] | { error: string }> {
+  const openSkyResult = await getFlightsFromOpenSky(box);
+  if (!("error" in openSkyResult)) return openSkyResult;
+
+  console.error(`OpenSky unavailable (${openSkyResult.error}) — falling back to ADS-B mirrors`);
+  const errors = [openSkyResult.error];
+  for (const mirror of ADSB_MIRRORS) {
+    const result = await getFlightsFromAdsbMirror(mirror, box);
+    if (!("error" in result)) return result;
+    errors.push(result.error);
+  }
+
+  return { error: `Flight lookup failed: ${errors.join("; ")}` };
 }
 
 export function flightToMapPoint(f: Flight): MapPoint {
