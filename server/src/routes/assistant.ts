@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { db, saveMapPointsFromSearch, type AssistantSettingsRow, type ChatMessageRow } from "../db.js";
 import { getAssistantReply, transcribeAudio, type MapData, type Provider } from "../llm.js";
+import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 
 // How much of the account's stored chat log to load per request. This bounds
@@ -88,13 +89,16 @@ async function backupMapData(userId: string, mapData: MapData | null) {
 // GET the signed-in account's assistant settings. Any device that logs into
 // the same account reads the same row here, which is what keeps
 // personalization in sync across iOS and PC.
-assistantRouter.get("/settings", async (req: AuthedRequest, res) => {
-  const row = await getSettingsRow(req.userId!);
-  if (!row) {
-    return res.status(404).json({ error: "Settings not found" });
-  }
-  res.json(toApiSettings(row));
-});
+assistantRouter.get(
+  "/settings",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const row = await getSettingsRow(req.userId!);
+    if (!row) {
+      return res.status(404).json({ error: "Settings not found" });
+    }
+    res.json(toApiSettings(row));
+  })
+);
 
 const settingsSchema = z.object({
   assistantName: z.string().min(1).max(80).optional(),
@@ -103,51 +107,57 @@ const settingsSchema = z.object({
   preferredProvider: z.enum(["groq", "gemini"]).optional(),
 });
 
-assistantRouter.put("/settings", async (req: AuthedRequest, res) => {
-  const parsed = settingsSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
-  }
+assistantRouter.put(
+  "/settings",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const parsed = settingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
+    }
 
-  const current = await getSettingsRow(req.userId!);
-  if (!current) {
-    return res.status(404).json({ error: "Settings not found" });
-  }
+    const current = await getSettingsRow(req.userId!);
+    if (!current) {
+      return res.status(404).json({ error: "Settings not found" });
+    }
 
-  const next = {
-    assistant_name: parsed.data.assistantName ?? current.assistant_name,
-    instructions: parsed.data.instructions ?? current.instructions,
-    preferences_json: parsed.data.preferences
-      ? JSON.stringify(parsed.data.preferences)
-      : current.preferences_json,
-    preferred_provider: parsed.data.preferredProvider ?? current.preferred_provider,
-  };
+    const next = {
+      assistant_name: parsed.data.assistantName ?? current.assistant_name,
+      instructions: parsed.data.instructions ?? current.instructions,
+      preferences_json: parsed.data.preferences
+        ? JSON.stringify(parsed.data.preferences)
+        : current.preferences_json,
+      preferred_provider: parsed.data.preferredProvider ?? current.preferred_provider,
+    };
 
-  await db.execute({
-    sql: `UPDATE assistant_settings
+    await db.execute({
+      sql: `UPDATE assistant_settings
           SET assistant_name = ?, instructions = ?, preferences_json = ?, preferred_provider = ?, updated_at = datetime('now')
           WHERE user_id = ?`,
-    args: [next.assistant_name, next.instructions, next.preferences_json, next.preferred_provider, req.userId!],
-  });
+      args: [next.assistant_name, next.instructions, next.preferences_json, next.preferred_provider, req.userId!],
+    });
 
-  const updated = await getSettingsRow(req.userId!);
-  res.json(toApiSettings(updated!));
-});
+    const updated = await getSettingsRow(req.userId!);
+    res.json(toApiSettings(updated!));
+  })
+);
 
 // The account's saved conversation, oldest first — loaded on app open so a
 // refresh or a different device picks up where the last one left off.
-assistantRouter.get("/messages", async (req: AuthedRequest, res) => {
-  const rows = await getChatHistory(req.userId!);
-  res.json({
-    messages: rows.map((r) => ({
-      role: r.role,
-      content: r.content,
-      createdAt: r.created_at,
-      mapData: r.map_data_json ? JSON.parse(r.map_data_json) : null,
-      toolsUsed: r.tools_used_json ? JSON.parse(r.tools_used_json) : [],
-    })),
-  });
-});
+assistantRouter.get(
+  "/messages",
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const rows = await getChatHistory(req.userId!);
+    res.json({
+      messages: rows.map((r) => ({
+        role: r.role,
+        content: r.content,
+        createdAt: r.created_at,
+        mapData: r.map_data_json ? JSON.parse(r.map_data_json) : null,
+        toolsUsed: r.tools_used_json ? JSON.parse(r.tools_used_json) : [],
+      })),
+    });
+  })
+);
 
 const chatSchema = z.object({
   message: z.string().min(1).max(4000),

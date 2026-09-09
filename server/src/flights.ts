@@ -43,11 +43,23 @@ export async function getFlightsInBoundingBox(box: BoundingBox): Promise<Flight[
     lamax: String(box.north),
     lomax: String(box.east),
   });
-  const res = await fetch(`${OPENSKY_STATES_URL}?${params}`);
-  if (!res.ok) {
-    return { error: `Flight lookup failed (${res.status})` };
+
+  let data: OpenSkyResponse;
+  try {
+    // A plain `if (!res.ok)` only handles an HTTP-level error response — a
+    // connection failure (OpenSky unreachable, DNS hiccup, timeout) makes
+    // fetch() itself throw instead, which without this try/catch propagated
+    // all the way out as an unhandled rejection and crashed the whole
+    // server (confirmed in production). The explicit timeout keeps a hung
+    // connection from stalling the request indefinitely either.
+    const res = await fetch(`${OPENSKY_STATES_URL}?${params}`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) {
+      return { error: `Flight lookup failed (${res.status})` };
+    }
+    data = (await res.json()) as OpenSkyResponse;
+  } catch (err) {
+    return { error: `Flight lookup failed: ${err instanceof Error ? err.message : "network error"}` };
   }
-  const data = (await res.json()) as OpenSkyResponse;
   if (!data.states) return [];
 
   // Index positions per OpenSky's documented state-vector array order:

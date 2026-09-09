@@ -38,11 +38,20 @@ export async function importPointFromUrl(url: string): Promise<ImportedPoint | {
     };
   }
 
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-  if (!res.ok) {
-    return { error: `Couldn't load that URL (${res.status})` };
+  try {
+    // A connection-level failure (unreachable host, DNS hiccup, timeout) —
+    // as opposed to a normal HTTP error response — makes fetch() itself
+    // throw. Left uncaught this propagates as an unhandled rejection and
+    // crashes the whole server (confirmed in production for the same
+    // pattern elsewhere), not just this one request.
+    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) {
+      return { error: `Couldn't load that URL (${res.status})` };
+    }
+    const html = await res.text();
+    const title = extractHtmlTitle(html) ?? url;
+    return { name: title, blurb: "", icon: "🔗", urls: [url], lat: null, lon: null };
+  } catch (err) {
+    return { error: `Couldn't load that URL: ${err instanceof Error ? err.message : "network error"}` };
   }
-  const html = await res.text();
-  const title = extractHtmlTitle(html) ?? url;
-  return { name: title, blurb: "", icon: "🔗", urls: [url], lat: null, lon: null };
 }
