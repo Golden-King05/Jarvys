@@ -28,11 +28,13 @@ function AuthedApp() {
   const [showRadar, setShowRadar] = useState(false);
   const [showTimezoneBands, setShowTimezoneBands] = useState(false);
   const [showPins, setShowPins] = useState(true);
+  const [showFlights, setShowFlights] = useState(false);
 
   function handleLayerCommand(cmd: LayerCommand) {
     if (cmd.layer === "radar") setShowRadar(cmd.enabled);
     else if (cmd.layer === "timezones") setShowTimezoneBands(cmd.enabled);
     else if (cmd.layer === "pins") setShowPins(cmd.enabled);
+    else if (cmd.layer === "flights") setShowFlights(cmd.enabled);
   }
 
   return (
@@ -67,6 +69,8 @@ function AuthedApp() {
             setShowTimezoneBands={setShowTimezoneBands}
             showPins={showPins}
             setShowPins={setShowPins}
+            showFlights={showFlights}
+            setShowFlights={setShowFlights}
           />
         ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}

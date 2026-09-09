@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { authRouter } from "./routes/auth.js";
 import { assistantRouter } from "./routes/assistant.js";
+import { flightsRouter } from "./routes/flights.js";
 import { pointsRouter } from "./routes/points.js";
 
 const app = express();
@@ -14,6 +15,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/auth", authRouter);
 app.use("/assistant", assistantRouter);
 app.use("/points", pointsRouter);
+app.use("/flights", flightsRouter);
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {

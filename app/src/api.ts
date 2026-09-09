@@ -61,7 +61,7 @@ export interface RegionMapData {
 }
 
 export interface MapData {
-  kind: "places" | "distance" | "landmark" | "regions" | "point_suggestion";
+  kind: "places" | "distance" | "landmark" | "regions" | "point_suggestion" | "flights";
   points: MapPoint[];
   distanceMiles?: number;
   distanceKm?: number;
@@ -73,8 +73,15 @@ export interface MapData {
 // A request to turn a map layer on or off — the assistant can ask for this,
 // but the layer state itself lives entirely on the client.
 export interface LayerCommand {
-  layer: "radar" | "timezones" | "pins";
+  layer: "radar" | "timezones" | "pins" | "flights";
   enabled: boolean;
+}
+
+export interface MapBoundingBox {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
 }
 
 export interface ChatResponse {
@@ -221,6 +228,15 @@ export const api = {
   // "pick an existing header" suggestions in the tag editor so headers
   // naturally stay consistent instead of drifting into near-duplicates.
   getTagKeys: (baseUrl: string, token: string) => request<{ keys: string[] }>(baseUrl, "/points/tags", { token }),
+
+  // Live aircraft within a map viewport, pre-formatted as ready-to-render
+  // points — backs the "Live flights" layer.
+  getFlights: (baseUrl: string, token: string, box: MapBoundingBox) =>
+    request<{ points: MapPoint[] }>(
+      baseUrl,
+      `/flights?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}`,
+      { token }
+    ),
 
   createPoint: (baseUrl: string, token: string, point: NewPoint) =>
     request<Point>(baseUrl, "/points", { method: "POST", token, body: point }),

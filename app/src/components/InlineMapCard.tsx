@@ -74,6 +74,8 @@ export default function InlineMapCard({ mapData, onVerifyMap }: InlineMapCardPro
         : `${suggestions.length} new points found`;
   } else if (mapData.kind === "landmark") {
     summary = mapData.points[0]?.label ?? "Location found";
+  } else if (mapData.kind === "flights") {
+    summary = `${mapData.points.length} flight${mapData.points.length === 1 ? "" : "s"} nearby`;
   } else {
     summary = `${mapData.points.length} place${mapData.points.length === 1 ? "" : "s"} found`;
   }

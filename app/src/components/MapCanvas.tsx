@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
-import type { MapPoint, RegionMapData } from "../api";
+import { api, type MapPoint, type RegionMapData } from "../api";
+import { useAuth } from "../AuthContext";
 import { outerRings } from "../utils/geojson";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
+
+// Anonymous OpenSky access is rate-limited — this keeps polling infrequent
+// enough to stay well within it while still feeling roughly "live".
+const FLIGHTS_POLL_MS = 20000;
 
 interface MapCanvasProps {
   points: MapPoint[];
@@ -22,6 +27,9 @@ interface MapCanvasProps {
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
+  // Shows a live-updating layer of nearby aircraft (via the server's
+  // /flights proxy to OpenSky), polled on an interval while on.
+  showFlights?: boolean;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -75,12 +83,15 @@ export default function MapCanvas({
   showRadar,
   showTimezoneBands,
   showPins = true,
+  showFlights,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
+  const { baseUrl, token } = useAuth();
   const mapRef = useRef<MapView>(null);
   const hasFitInitially = useRef(false);
   const [radarTemplate, setRadarTemplate] = useState<string | null>(null);
+  const [flightPoints, setFlightPoints] = useState<MapPoint[]>([]);
   const [currentZoom, setCurrentZoom] = useState(() =>
     zoomFromLongitudeDelta(initialRegion ? 0.1 : DEFAULT_REGION.longitudeDelta)
   );
@@ -99,6 +110,35 @@ export default function MapCanvas({
       cancelled = true;
     };
   }, [showRadar]);
+
+  useEffect(() => {
+    if (!showFlights || !token) {
+      setFlightPoints([]);
+      return;
+    }
+    let cancelled = false;
+    async function poll() {
+      const bounds = await mapRef.current?.getMapBoundaries();
+      if (!bounds || cancelled || !token) return;
+      try {
+        const { points: flights } = await api.getFlights(baseUrl, token, {
+          south: bounds.southWest.latitude,
+          west: bounds.southWest.longitude,
+          north: bounds.northEast.latitude,
+          east: bounds.northEast.longitude,
+        });
+        if (!cancelled) setFlightPoints(flights);
+      } catch {
+        // A failed poll just leaves the last-known flights on screen.
+      }
+    }
+    poll();
+    const interval = setInterval(poll, FLIGHTS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [showFlights, baseUrl, token]);
 
   function fitToContent() {
     if (!mapRef.current) return;
@@ -217,6 +257,21 @@ export default function MapCanvas({
             >
               <View style={styles.markerBubble}>
                 <Text style={styles.markerEmoji}>{p.icon ?? "📍"}</Text>
+              </View>
+            </Marker>
+          ))
+        : null}
+
+      {showFlights
+        ? flightPoints.map((p, i) => (
+            <Marker
+              key={`flight-${i}`}
+              coordinate={{ latitude: p.lat, longitude: p.lon }}
+              onPress={() => onPointPress?.(p)}
+              tracksViewChanges={false}
+            >
+              <View style={styles.markerBubble}>
+                <Text style={styles.markerEmoji}>{p.icon ?? "✈️"}</Text>
               </View>
             </Marker>
           ))

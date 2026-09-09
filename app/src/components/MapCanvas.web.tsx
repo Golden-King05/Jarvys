@@ -1,8 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { MapPoint, RegionMapData } from "../api";
+import { api, type MapPoint, type RegionMapData } from "../api";
+import { useAuth } from "../AuthContext";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
+
+// Anonymous OpenSky access is rate-limited — this keeps polling infrequent
+// enough to stay well within it while still feeling roughly "live".
+const FLIGHTS_POLL_MS = 20000;
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -52,6 +57,9 @@ interface MapCanvasProps {
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
+  // Shows a live-updating layer of nearby aircraft (via the server's
+  // /flights proxy to OpenSky), polled on an interval while on.
+  showFlights?: boolean;
   // Below this zoom level, point markers are hidden regardless of showPins —
   // a large saved collection is unreadable as a wall of overlapping emoji
   // once zoomed out to a whole state or country, so pins only appear once
@@ -91,17 +99,22 @@ export default function MapCanvas({
   showRadar,
   showTimezoneBands,
   showPins = true,
+  showFlights,
   minPinZoom,
   focusKey,
 }: MapCanvasProps) {
+  const { baseUrl, token } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
   const layerGroup = useRef<Leaflet>(null);
   const radarLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
+  const flightsLayerRef = useRef<Leaflet>(null);
   const hasFitInitially = useRef(false);
   const onMapPressRef = useRef(onMapPress);
   onMapPressRef.current = onMapPress;
+  const onPointPressRef = useRef(onPointPress);
+  onPointPressRef.current = onPointPress;
   const [currentZoom, setCurrentZoom] = useState(initialRegion ? 12 : 4);
   const shouldShowPins = showPins && (minPinZoom === undefined || currentZoom >= minPinZoom);
 
@@ -304,6 +317,54 @@ export default function MapCanvas({
       }
     });
   }, [showTimezoneBands]);
+
+  // Own persistent layer, same reasoning as radar/timezones above — polling
+  // redraws just this layer without touching points/regions.
+  useEffect(() => {
+    if (!showFlights || !token) {
+      loadLeaflet().then((L) => {
+        const map = mapInstance.current;
+        if (map && flightsLayerRef.current) {
+          map.removeLayer(flightsLayerRef.current);
+          flightsLayerRef.current = null;
+        }
+      });
+      return;
+    }
+    let cancelled = false;
+    async function poll() {
+      const L = await loadLeaflet();
+      const map = mapInstance.current;
+      if (cancelled || !map || !token) return;
+      const bounds = map.getBounds();
+      let flights: MapPoint[];
+      try {
+        const response = await api.getFlights(baseUrl, token, {
+          south: bounds.getSouth(),
+          west: bounds.getWest(),
+          north: bounds.getNorth(),
+          east: bounds.getEast(),
+        });
+        flights = response.points;
+      } catch {
+        return; // A failed poll just leaves the last-known flights on screen.
+      }
+      if (cancelled) return;
+      if (!flightsLayerRef.current) flightsLayerRef.current = L.layerGroup().addTo(map);
+      flightsLayerRef.current.clearLayers();
+      flights.forEach((p) => {
+        L.marker([p.lat, p.lon], { icon: emojiIcon(L, p.icon ?? "✈️") })
+          .addTo(flightsLayerRef.current)
+          .on("click", () => onPointPressRef.current?.(p));
+      });
+    }
+    poll();
+    const interval = setInterval(poll, FLIGHTS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [showFlights, baseUrl, token]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }

@@ -1,7 +1,10 @@
+import { getAirQuality } from "./airquality.js";
 import { convertCurrency } from "./currency.js";
 import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, incrementProviderUsage, type PointTag } from "./db.js";
+import { flightToMapPoint, getFlightsInBoundingBox } from "./flights.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, LayerCommand, MapData } from "./llm.js";
+import { getActiveAlerts, getNwsForecast } from "./nws.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
 import { findArticlesInArea, getWikipediaByTitle, searchWikipedia, wikipediaTitleFromUrl } from "./wikipedia.js";
@@ -243,13 +246,54 @@ const SEARCH_WIKIPEDIA_TOOL = {
       },
     },
     {
-      name: "set_map_layer",
+      name: "get_weather_alerts",
       description:
-        "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), or 'pins' (their saved points). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+        "Check active severe weather alerts (warnings, watches, advisories) for a US location, via the National Weather Service. US only — if asked about another country, say alerts aren't available there. Use when the user asks about storm warnings, weather alerts, or whether severe weather is expected.",
       parameters: {
         type: "object",
         properties: {
-          layer: { type: "string", enum: ["radar", "timezones", "pins"], description: "Which layer to change." },
+          location: { type: "string", description: "The place to check, e.g. a city or address." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "get_air_quality",
+      description:
+        "Get current air quality (US AQI, PM2.5, PM10, ozone) for a location. Use when the user asks about air quality, pollution, smoke, or whether it's safe to be outside. Also drops a pin on the user's map.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to check, e.g. a city or address." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "find_flights_near",
+      description:
+        "Find live aircraft currently flying near a location (via OpenSky Network) and preview them on the user's map. Use when the user asks what flights are overhead, near them, or near some place. This is a single snapshot — real positions update roughly every 10-15 seconds.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to search near, e.g. a city or address." },
+          radiusKm: { type: "number", description: "Search radius in kilometers (default 50, max 200)." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "set_map_layer",
+      description:
+        "Turn one of the user's map layers on or off: 'radar' (live weather radar overlay), 'timezones' (time zone bands), 'pins' (their saved points), or 'flights' (live nearby aircraft). Use this when the user asks to show, hide, turn on/off, or toggle one of these on the map.",
+      parameters: {
+        type: "object",
+        properties: {
+          layer: {
+            type: "string",
+            enum: ["radar", "timezones", "pins", "flights"],
+            description: "Which layer to change.",
+          },
           enabled: { type: "boolean", description: "true to turn it on, false to turn it off." },
         },
         required: ["layer", "enabled"],
@@ -533,6 +577,35 @@ async function executeTool(
       return { result: { error: "Missing required 'location' argument" }, mapData: null };
     }
     const days = typeof args.days === "number" ? args.days : 5;
+
+    // NWS's forecast is higher quality (detailed prose, twice-daily periods)
+    // but only covers the US — try it first and quietly fall back to
+    // Open-Meteo (worldwide) when the location is outside its coverage.
+    const nws = await getNwsForecast(location, days * 2);
+    if (!("error" in nws)) {
+      return {
+        result: nws,
+        mapData: {
+          kind: "landmark",
+          points: [
+            {
+              label: nws.location,
+              lat: nws.lat,
+              lon: nws.lon,
+              icon: "🌡️",
+              category: "forecast",
+              blurb: nws.periods
+                .map(
+                  (p) =>
+                    `${p.name}: ${p.shortForecast}, ${p.temperatureF}°F${p.precipitationChance != null ? `, ${p.precipitationChance}% precip` : ""}`
+                )
+                .join("\n"),
+            },
+          ],
+        },
+      };
+    }
+
     const result = await getForecast(location, days);
     if ("error" in result) return { result, mapData: null };
     return {
@@ -552,6 +625,92 @@ async function executeTool(
           },
         ],
       },
+    };
+  }
+
+  if (call.name === "get_weather_alerts") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getActiveAlerts(location);
+    if ("error" in result) return { result, mapData: null };
+    if (result.alerts.length === 0) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: "⚠️",
+            category: "weather alert",
+            blurb: result.alerts.map((a) => `${a.event}: ${a.headline}`).join("\n"),
+          },
+        ],
+      },
+    };
+  }
+
+  if (call.name === "get_air_quality") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getAirQuality(location);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: "🌬️",
+            category: "air quality",
+            blurb: `AQI ${result.aqi ?? "?"} (${result.category}). PM2.5 ${result.pm2_5 ?? "?"} µg/m³, PM10 ${result.pm10 ?? "?"} µg/m³, ozone ${result.ozone ?? "?"} µg/m³.`,
+          },
+        ],
+      },
+    };
+  }
+
+  if (call.name === "find_flights_near") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const center = await geocode(location);
+    if ("error" in center) return { result: center, mapData: null };
+    const radiusKm = Math.min(typeof args.radiusKm === "number" ? args.radiusKm : 50, 200);
+    const dLat = radiusKm / 111;
+    const dLon = radiusKm / (111 * Math.cos((center.lat * Math.PI) / 180) || 1);
+    const flights = await getFlightsInBoundingBox({
+      south: center.lat - dLat,
+      west: center.lon - dLon,
+      north: center.lat + dLat,
+      east: center.lon + dLon,
+    });
+    if ("error" in flights) return { result: flights, mapData: null };
+    if (flights.length === 0) {
+      return { result: { message: `No flights currently detected near ${center.name}` }, mapData: null };
+    }
+    const shown = flights.slice(0, 30);
+    return {
+      result: {
+        count: flights.length,
+        flights: shown.map((f) => ({
+          callsign: f.callsign,
+          originCountry: f.originCountry,
+          altitudeFt: f.altitudeFt,
+          velocityMph: f.velocityMph,
+        })),
+      },
+      mapData: { kind: "flights", points: shown.map(flightToMapPoint) },
     };
   }
 

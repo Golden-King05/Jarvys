@@ -32,6 +32,8 @@ interface MapScreenProps {
   setShowTimezoneBands: (v: boolean) => void;
   showPins: boolean;
   setShowPins: (v: boolean) => void;
+  showFlights: boolean;
+  setShowFlights: (v: boolean) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awaiting-tap";
@@ -60,6 +62,8 @@ export default function MapScreen({
   setShowTimezoneBands,
   showPins,
   setShowPins,
+  showFlights,
+  setShowFlights,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
@@ -369,6 +373,7 @@ export default function MapScreen({
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
           showPins={showPins}
+          showFlights={showFlights}
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
         />
@@ -452,6 +457,14 @@ export default function MapScreen({
                 <Text style={styles.layerHint}>Approximate — not exact borders</Text>
               </View>
               <Switch value={showTimezoneBands} onValueChange={setShowTimezoneBands} />
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Live flights</Text>
+                <Text style={styles.layerHint}>Nearby aircraft (OpenSky), updates periodically</Text>
+              </View>
+              <Switch value={showFlights} onValueChange={setShowFlights} />
             </View>
           </View>
         </View>
