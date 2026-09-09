@@ -411,6 +411,19 @@ export async function verifyRegionStatuses(
   return { mapData: { kind: "regions", points: [], regionType, regions, verified: true } };
 }
 
+// See the identical helper in llm.ts for why this exists — a plain "call
+// the tool" instruction wasn't reliable enough on its own, so forecast-
+// shaped messages force the tool call on the first turn instead.
+const FORECAST_KEYWORD = /\bforecast\b/i;
+const FUTURE_WEATHER_PHRASE =
+  /\b(tomorrow|tonight|this week|next week|this weekend|next weekend|coming days|next few days|later this week)\b/i;
+const WEATHER_TOPIC_WORD = /\b(weather|rain|snow|temperature|hot|cold|sunny|cloudy|storm)\b/i;
+
+function looksLikeForecastRequest(message: string): boolean {
+  if (FORECAST_KEYWORD.test(message)) return true;
+  return FUTURE_WEATHER_PHRASE.test(message) && WEATHER_TOPIC_WORD.test(message);
+}
+
 function parseTagsArg(value: unknown): PointTag[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const tags: PointTag[] = [];
@@ -924,6 +937,7 @@ export async function getGeminiReply(params: {
   let mapData: MapData | null = null;
   let layerCommand: LayerCommand | null = null;
   const toolsUsed = new Set<string>();
+  const forceForecastTool = looksLikeForecastRequest(params.message);
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const res = await fetch(`${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
@@ -933,6 +947,9 @@ export async function getGeminiReply(params: {
         contents,
         systemInstruction: { parts: [{ text: params.systemPrompt }] },
         tools: [SEARCH_WIKIPEDIA_TOOL],
+        ...(iteration === 0 && forceForecastTool
+          ? { toolConfig: { functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["get_weather_forecast"] } } }
+          : {}),
         generationConfig: {
           maxOutputTokens: 4096,
           // gemini-3.x uses thinkingLevel (not the older thinkingBudget,

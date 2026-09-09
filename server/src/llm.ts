@@ -575,6 +575,26 @@ function regionsFromReply(reply: string): MapData | null {
   return { kind: "regions", points: [], regionType: found.regionType, regions: found.regions };
 }
 
+// A plain "call the tool if you need it" instruction wasn't reliable enough
+// in practice — confirmed live: asking for a multi-day forecast produced a
+// fully fabricated 7-day forecast with plausible-looking fake numbers and
+// toolsUsed: [], meaning the model never called get_weather_forecast at
+// all. Forecasts seem to be exactly the kind of thing a model has a
+// confident-sounding prior for, unlike an exact current temperature or a
+// live alert status (both of which route to their tools reliably). Rather
+// than keep tuning wording, detect the pattern up front and force the tool
+// call on the first turn — the model still writes the final reply, it just
+// can't skip the tool.
+const FORECAST_KEYWORD = /\bforecast\b/i;
+const FUTURE_WEATHER_PHRASE =
+  /\b(tomorrow|tonight|this week|next week|this weekend|next weekend|coming days|next few days|later this week)\b/i;
+const WEATHER_TOPIC_WORD = /\b(weather|rain|snow|temperature|hot|cold|sunny|cloudy|storm)\b/i;
+
+function looksLikeForecastRequest(message: string): boolean {
+  if (FORECAST_KEYWORD.test(message)) return true;
+  return FUTURE_WEATHER_PHRASE.test(message) && WEATHER_TOPIC_WORD.test(message);
+}
+
 function parseTagsArg(value: unknown): PointTag[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const tags: PointTag[] = [];
@@ -1184,6 +1204,8 @@ async function runGroqPath(params: {
     SET_MAP_LAYER_TOOL,
   ];
 
+  const forceForecastTool = looksLikeForecastRequest(message);
+
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const res = await fetch(GROQ_API_URL, {
       method: "POST",
@@ -1195,7 +1217,10 @@ async function runGroqPath(params: {
         model: GROQ_MODEL,
         messages,
         tools,
-        tool_choice: "auto",
+        tool_choice:
+          iteration === 0 && forceForecastTool
+            ? { type: "function", function: { name: "get_weather_forecast" } }
+            : "auto",
         // Qwen3.6 defaults to an extended "thinking" mode that can burn
         // hundreds of output tokens on even a one-line reply — easily
         // enough to trip Groq's free-tier output-tokens-per-minute cap
