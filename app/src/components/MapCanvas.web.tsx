@@ -98,6 +98,13 @@ interface MapCanvasProps {
   // the same points after an edit or a drag looks identical to that check,
   // which is what caused re-zooming out on every interaction.
   focusKey?: number;
+  // Center and zoom in on exactly this point, independent of whatever else
+  // is on the map — a search-bar result, say. Deliberately separate from
+  // focusKey/fitToContent, which fits every current point (including any
+  // saved pins scattered elsewhere) rather than zooming to one specific
+  // place; a new object reference (even for the same coordinates searched
+  // twice) is what re-triggers the pan.
+  flyTo?: { lat: number; lon: number } | null;
 }
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
@@ -149,6 +156,7 @@ export default function MapCanvas({
   showLiveLocation,
   minPinZoom,
   focusKey,
+  flyTo,
 }: MapCanvasProps) {
   const { baseUrl, token } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -327,6 +335,18 @@ export default function MapCanvas({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey]);
+
+  useEffect(() => {
+    if (!flyTo) return;
+    let cancelled = false;
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      if (!cancelled && map) map.setView([flyTo.lat, flyTo.lon], 13);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [flyTo]);
 
   // Radar and timezone bands live on their own persistent layers (not the
   // layerGroup above, which gets torn down and rebuilt on every points/

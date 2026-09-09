@@ -69,6 +69,13 @@ interface MapCanvasProps {
   // the same points after an edit or a drag looks identical to that check,
   // which is what caused re-zooming out on every interaction.
   focusKey?: number;
+  // Center and zoom in on exactly this point, independent of whatever else
+  // is on the map — a search-bar result, say. Deliberately separate from
+  // focusKey/fitToContent, which fits every current point (including any
+  // saved pins scattered elsewhere) rather than zooming to one specific
+  // place; a new object reference (even for the same coordinates searched
+  // twice) is what re-triggers the pan.
+  flyTo?: { lat: number; lon: number } | null;
 }
 
 const DEFAULT_REGION = {
@@ -114,6 +121,7 @@ export default function MapCanvas({
   showLiveLocation,
   minPinZoom,
   focusKey,
+  flyTo,
 }: MapCanvasProps) {
   const { baseUrl, token } = useAuth();
   const mapRef = useRef<MapView>(null);
@@ -258,6 +266,14 @@ export default function MapCanvas({
     if (focusKey !== undefined) fitToContent();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey]);
+
+  useEffect(() => {
+    if (!flyTo || !mapRef.current) return;
+    mapRef.current.animateToRegion(
+      { latitude: flyTo.lat, longitude: flyTo.lon, latitudeDelta: 0.05, longitudeDelta: 0.05 },
+      500
+    );
+  }, [flyTo]);
 
   return (
     <MapView

@@ -92,6 +92,7 @@ export default function MapScreen({
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<MapPoint | null>(null);
+  const [flyToTarget, setFlyToTarget] = useState<{ lat: number; lon: number } | null>(null);
 
   // Not lifted to App.tsx like the other layers — there's no reason for the
   // AI chat to toggle this the way it toggles radar/pins/flights, and
@@ -248,7 +249,10 @@ export default function MapScreen({
     try {
       const found = await api.geocode(baseUrl, token, query);
       setSearchResult({ label: found.name, lat: found.lat, lon: found.lon, icon: "🔍" });
-      setFocusSignal((n) => n + 1);
+      // A fresh object every search — even re-searching the same place —
+      // so the flyTo effect always re-triggers, independent of whatever
+      // other points (saved pins elsewhere, etc.) are currently on screen.
+      setFlyToTarget({ lat: found.lat, lon: found.lon });
     } catch (e) {
       setSearchResult(null);
       setSearchError(e instanceof Error ? e.message : "Location not found");
@@ -484,6 +488,7 @@ export default function MapScreen({
           showLiveLocation={showLiveLocation}
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
+          flyTo={flyToTarget}
         />
 
         <View style={styles.searchBar}>
