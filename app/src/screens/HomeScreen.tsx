@@ -76,11 +76,15 @@ interface HomeScreenProps {
 }
 
 export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: HomeScreenProps) {
-  const { baseUrl, token } = useAuth();
+  const { baseUrl, token, serverStatus } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Index of the most recent "you" message whose reply failed — lets that
+  // one message offer a retry without the user retyping it. Only the latest
+  // failure is tracked; sending (or retrying into) anything new clears it.
+  const [failedMessageIndex, setFailedMessageIndex] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [muted, setMuted] = useState(false);
   const [usage, setUsage] = useState<UsageState | null>(null);
@@ -171,12 +175,34 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
     if (!text.trim() || !token) return;
     setError(null);
     setPendingThinking(null);
+    const index = messages.length; // where the new "you" message will land
     setMessages((prev) => [...prev, { from: "you", text }]);
+    setFailedMessageIndex(null);
     setThinking(true);
     try {
       await requestReply(text);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to send message");
+      setFailedMessageIndex(index);
+    } finally {
+      setThinking(false);
+    }
+  }
+
+  // Re-sends an already-shown "you" message without adding a duplicate —
+  // the message is already in the list, only the failed attempt to answer
+  // it needs retrying.
+  async function retryMessage(index: number) {
+    const text = messages[index]?.text;
+    if (!text || !token) return;
+    setError(null);
+    setFailedMessageIndex(null);
+    setThinking(true);
+    try {
+      await requestReply(text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to send message");
+      setFailedMessageIndex(index);
     } finally {
       setThinking(false);
     }
@@ -358,6 +384,15 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
         </View>
       </Modal>
 
+      {serverStatus === "checking" ? (
+        <View style={styles.wakingBanner}>
+          <ActivityIndicator size="small" color="#8a6d1d" />
+          <Text style={styles.wakingBannerText}>
+            Waking up the assistant — may take up to a minute if it's been idle…
+          </Text>
+        </View>
+      ) : null}
+
       <ScrollView ref={scrollViewRef} style={styles.messages} contentContainerStyle={{ padding: 16 }}>
         {messages.length === 0 ? (
           <Text style={styles.placeholder}>Say something to your assistant.</Text>
@@ -368,6 +403,11 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
               {m.from === "you" ? "You: " : ""}
               {renderFormattedText(m.text)}
             </Text>
+            {i === failedMessageIndex && !thinking ? (
+              <TouchableOpacity style={styles.retryButton} onPress={() => retryMessage(i)} hitSlop={8}>
+                <Text style={styles.retryButtonText}>↻ Retry</Text>
+              </TouchableOpacity>
+            ) : null}
             {m.mapData ? (
               <InlineMapCard mapData={m.mapData} onVerifyMap={() => sendMessage("Verify the map")} />
             ) : null}
@@ -451,6 +491,21 @@ const styles = StyleSheet.create({
   thinkingIndicator: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4, marginBottom: 8 },
   thinkingIndicatorText: { fontFamily: fonts.regular, color: "#888", fontSize: 13 },
   error: { fontFamily: fonts.regular, color: "#c0392b", paddingHorizontal: 16 },
+  retryButton: { alignSelf: "flex-start", marginTop: -4, marginBottom: 8 },
+  retryButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#2980b9" },
+  wakingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: "#fff8e6",
+    borderWidth: 1,
+    borderColor: "#f0d99a",
+  },
+  wakingBannerText: { fontFamily: fonts.medium, fontSize: 12, color: "#8a6d1d", flex: 1 },
   usageSubtext: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 1, marginLeft: 16 },
   modalOverlay: {
     flex: 1,

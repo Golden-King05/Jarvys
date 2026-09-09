@@ -215,6 +215,20 @@ async function request<T>(
 }
 
 export const api = {
+  // Used only to "wake" Render's free-tier server (spun down after
+  // inactivity, ~50s+ to cold-start) before the user's first real message —
+  // a plain fetch with a generous timeout, resolving to a boolean rather
+  // than throwing, since a slow health check isn't itself a user-facing
+  // error the way a failed chat request is.
+  checkHealth: async (baseUrl: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(60000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
   register: (baseUrl: string, email: string, password: string) =>
     request<{ token: string; user: { id: string; email: string } }>(baseUrl, "/auth/register", {
       method: "POST",
