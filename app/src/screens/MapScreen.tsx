@@ -170,7 +170,15 @@ export default function MapScreen({
     if (mapData) return; // The AI's plotted points drive the view instead once there are any.
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        // Only a status check, never a request — iOS shows its native
+        // permission dialog exactly once per install, and spending that on
+        // a passive "center the map" convenience (before the user has done
+        // anything that actually needs location) meant the Live location
+        // toggle's own first tap found permission already burned, jumping
+        // straight to "go to Settings" instead of ever showing the prompt.
+        // If permission isn't already granted, the map just opens to its
+        // default view — the toggle is the one thing allowed to ask.
+        const { status } = await Location.getForegroundPermissionsAsync();
         if (status !== "granted") return;
         const position = await Location.getCurrentPositionAsync({});
         setInitialRegion({ latitude: position.coords.latitude, longitude: position.coords.longitude });
