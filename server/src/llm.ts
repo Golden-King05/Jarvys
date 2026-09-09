@@ -567,7 +567,8 @@ export async function getAssistantReply(params: {
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
-    "You can check current weather with get_weather and the current local time with get_local_time — both also drop a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
+    "You can check current weather with get_weather — it also drops a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
+    "You have no built-in way to know the real current date or time — never guess, compute, or state a specific current time or date on your own, even one that seems obviously derivable (e.g. from a timezone offset), since you can't verify it's actually correct right now. Always call get_local_time for any question about the current time, date, or day somewhere; it also drops a pin on the user's map.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
