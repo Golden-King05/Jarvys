@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   ScrollView,
@@ -17,6 +17,7 @@ import RegionLegend from "../components/RegionLegend";
 import { api, isSavedPoint, type MapData, type MapPoint, type Point, type RegionMapData } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
+import { suggestIcon } from "../utils/suggestIcon";
 
 interface MapScreenProps {
   mapData: MapData | null;
@@ -59,6 +60,32 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   const [detailsDraft, setDetailsDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "" });
   const [submitting, setSubmitting] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  // Once someone types their own icon, stop overwriting it with suggestions
+  // based on category/subcategory — reset whenever a form is reopened.
+  const urlIconLocked = useRef(false);
+  const detailsIconLocked = useRef(false);
+
+  function updateUrlDraft(patch: Partial<typeof urlDraft>) {
+    setUrlDraft((d) => {
+      const next = { ...d, ...patch };
+      if (!urlIconLocked.current) {
+        const suggestion = suggestIcon(next.category, next.subcategory);
+        if (suggestion) next.icon = suggestion;
+      }
+      return next;
+    });
+  }
+
+  function updateDetailsDraft(patch: Partial<typeof detailsDraft>) {
+    setDetailsDraft((d) => {
+      const next = { ...d, ...patch };
+      if (!detailsIconLocked.current) {
+        const suggestion = suggestIcon(next.category, next.subcategory);
+        if (suggestion) next.icon = suggestion;
+      }
+      return next;
+    });
+  }
 
   const [showLayers, setShowLayers] = useState(false);
   const [showRadar, setShowRadar] = useState(false);
@@ -106,6 +133,8 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
     setManualCoords({ lat: "", lon: "" });
     setUrlDraft({ url: "", category: "", subcategory: "", icon: "" });
     setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "" });
+    urlIconLocked.current = false;
+    detailsIconLocked.current = false;
     setAddError(null);
   }
 
@@ -435,19 +464,22 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
               style={styles.input}
               placeholder="Category (optional)"
               value={urlDraft.category}
-              onChangeText={(v) => setUrlDraft((d) => ({ ...d, category: v }))}
+              onChangeText={(v) => updateUrlDraft({ category: v })}
             />
             <TextInput
               style={styles.input}
               placeholder="Subcategory (optional)"
               value={urlDraft.subcategory}
-              onChangeText={(v) => setUrlDraft((d) => ({ ...d, subcategory: v }))}
+              onChangeText={(v) => updateUrlDraft({ subcategory: v })}
             />
             <TextInput
               style={styles.input}
-              placeholder="Icon emoji (optional)"
+              placeholder="Icon emoji (optional) — auto-suggested from category"
               value={urlDraft.icon}
-              onChangeText={(v) => setUrlDraft((d) => ({ ...d, icon: v }))}
+              onChangeText={(v) => {
+                urlIconLocked.current = true;
+                setUrlDraft((d) => ({ ...d, icon: v }));
+              }}
             />
             {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
             <View style={styles.formButtons}>
@@ -481,19 +513,22 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
               style={styles.input}
               placeholder="Category (e.g. restaurant)"
               value={detailsDraft.category}
-              onChangeText={(v) => setDetailsDraft((d) => ({ ...d, category: v }))}
+              onChangeText={(v) => updateDetailsDraft({ category: v })}
             />
             <TextInput
               style={styles.input}
               placeholder="Subcategory (e.g. Chinese fusion restaurant)"
               value={detailsDraft.subcategory}
-              onChangeText={(v) => setDetailsDraft((d) => ({ ...d, subcategory: v }))}
+              onChangeText={(v) => updateDetailsDraft({ subcategory: v })}
             />
             <TextInput
               style={styles.input}
-              placeholder="Icon emoji"
+              placeholder="Icon emoji — auto-suggested from category"
               value={detailsDraft.icon}
-              onChangeText={(v) => setDetailsDraft((d) => ({ ...d, icon: v }))}
+              onChangeText={(v) => {
+                detailsIconLocked.current = true;
+                setDetailsDraft((d) => ({ ...d, icon: v }));
+              }}
             />
             <TextInput
               style={[styles.input, styles.blurbInput]}

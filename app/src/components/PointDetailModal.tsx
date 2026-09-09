@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { isSavedPoint, type MapPoint, type Point } from "../api";
 import { fonts } from "../theme";
+import { suggestIcon } from "../utils/suggestIcon";
 
 type DetailSource = Point | MapPoint;
 
@@ -45,6 +46,20 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
   const [draft, setDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", urls: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Locked as soon as someone edits the icon field by hand, so category
+  // suggestions stop overwriting a deliberate choice — reset on each edit.
+  const iconLocked = useRef(false);
+
+  function updateDraft(patch: Partial<typeof draft>) {
+    setDraft((d) => {
+      const next = { ...d, ...patch };
+      if (!iconLocked.current) {
+        const suggestion = suggestIcon(next.category, next.subcategory);
+        if (suggestion) next.icon = suggestion;
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     setEditing(false);
@@ -70,6 +85,7 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
       blurb,
       urls: urls.join("\n"),
     });
+    iconLocked.current = false;
     setError(null);
     setEditing(true);
   }
@@ -124,19 +140,22 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
                 style={styles.input}
                 placeholder="Category (e.g. restaurant)"
                 value={draft.category}
-                onChangeText={(v) => setDraft((d) => ({ ...d, category: v }))}
+                onChangeText={(v) => updateDraft({ category: v })}
               />
               <TextInput
                 style={styles.input}
                 placeholder="Subcategory (e.g. Chinese fusion restaurant)"
                 value={draft.subcategory}
-                onChangeText={(v) => setDraft((d) => ({ ...d, subcategory: v }))}
+                onChangeText={(v) => updateDraft({ subcategory: v })}
               />
               <TextInput
                 style={styles.input}
-                placeholder="Icon emoji"
+                placeholder="Icon emoji — auto-suggested from category"
                 value={draft.icon}
-                onChangeText={(v) => setDraft((d) => ({ ...d, icon: v }))}
+                onChangeText={(v) => {
+                  iconLocked.current = true;
+                  setDraft((d) => ({ ...d, icon: v }));
+                }}
               />
               <TextInput
                 style={[styles.input, styles.blurbInput]}
