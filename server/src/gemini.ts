@@ -455,7 +455,13 @@ function parseTagsArg(value: unknown): PointTag[] | undefined {
 
 async function executeTool(
   call: GeminiFunctionCall,
-  userId: string
+  userId: string,
+  // Tool names already called earlier in this same turn — lets
+  // propose_map_point enforce that a real grounding search happened first,
+  // rather than trusting the system prompt's wording alone (which the model
+  // doesn't reliably follow: it would sometimes invent specifics like an
+  // architectural style or a National Register listing with no source).
+  groundedTools: ReadonlySet<string>
 ): Promise<{ result: unknown; mapData: MapData | null; layerCommand?: LayerCommand | null }> {
   const args = call.args ?? {};
 
@@ -805,6 +811,15 @@ async function executeTool(
     if (typeof name !== "string" || !name || typeof location !== "string" || !location || typeof description !== "string" || !description) {
       return { result: { error: "Missing required 'name'/'location'/'description' arguments" }, mapData: null };
     }
+    if (!groundedTools.has("search_wikipedia") && !groundedTools.has("search_web")) {
+      return {
+        result: {
+          error:
+            "Call search_wikipedia (or search_web if that finds nothing relevant) for this place first, then call propose_map_point again — even if you already believe you know real facts about it, since that belief is exactly what's caused made-up specifics before.",
+        },
+        mapData: null,
+      };
+    }
     const geo = await geocode(location);
     if ("error" in geo) return { result: geo, mapData: null };
     return {
@@ -1029,12 +1044,12 @@ export async function getGeminiReply(params: {
     }
 
     contents.push({ role: "model", parts });
-    toolsUsed.add(functionCallPart.functionCall.name);
     const {
       result,
       mapData: toolMapData,
       layerCommand: toolLayerCommand,
-    } = await executeTool(functionCallPart.functionCall, params.userId);
+    } = await executeTool(functionCallPart.functionCall, params.userId, toolsUsed);
+    toolsUsed.add(functionCallPart.functionCall.name);
     if (toolMapData) mapData = toolMapData;
     if (toolLayerCommand) layerCommand = toolLayerCommand;
     contents.push({

@@ -625,7 +625,13 @@ function parseTagsArg(value: unknown): PointTag[] | undefined {
 
 async function executeTool(
   call: ToolCall,
-  userId: string
+  userId: string,
+  // Tool names already called earlier in this same turn — lets
+  // propose_map_point enforce that a real grounding search happened first,
+  // rather than trusting the system prompt's wording alone (which the model
+  // doesn't reliably follow: it would sometimes invent specifics like an
+  // architectural style or a National Register listing with no source).
+  groundedTools: ReadonlySet<string>
 ): Promise<{ result: unknown; mapData: MapData | null; layerCommand?: LayerCommand | null }> {
   const name = call.function.name;
   let args: Record<string, unknown>;
@@ -975,6 +981,15 @@ async function executeTool(
       !args.description
     ) {
       return { result: { error: "Missing required 'name'/'location'/'description' arguments" }, mapData: null };
+    }
+    if (!groundedTools.has("search_wikipedia") && !groundedTools.has("search_web")) {
+      return {
+        result: {
+          error:
+            "Call search_wikipedia (or search_web if that finds nothing relevant) for this place first, then call propose_map_point again — even if you already believe you know real facts about it, since that belief is exactly what's caused made-up specifics before.",
+        },
+        mapData: null,
+      };
     }
     const geo = await geocode(args.location);
     if ("error" in geo) return { result: geo, mapData: null };
@@ -1372,8 +1387,8 @@ async function runGroqPath(params: {
 
     messages.push({ role: "assistant", content: responseMessage.content, tool_calls: responseMessage.tool_calls });
     for (const call of responseMessage.tool_calls) {
+      const { result, mapData: toolMapData, layerCommand: toolLayerCommand } = await executeTool(call, userId, toolsUsed);
       toolsUsed.add(call.function.name);
-      const { result, mapData: toolMapData, layerCommand: toolLayerCommand } = await executeTool(call, userId);
       if (toolMapData) mapData = toolMapData;
       if (toolLayerCommand) layerCommand = toolLayerCommand;
       messages.push({
@@ -1452,10 +1467,10 @@ export async function getAssistantReply(params: {
       // "Gemini hit some other error" indistinguishable from server logs.
       console.error("Gemini (preferred) failed, falling back to Groq:", err);
       if (!groqKey) {
-        return blankResult(
-          "Gemini (your default) is unavailable right now, and no backup model is configured.",
-          droppedMessages
-        );
+        // A real failure, not a "not configured yet" dev state — surfacing it
+        // as a thrown error (rather than a normal 200 reply) is what gives
+        // the client's retry-button logic something to catch onto.
+        throw new Error("Gemini (your default) is unavailable right now, and no backup model is configured.");
       }
       try {
         const result = await runGroqPath({
@@ -1471,9 +1486,8 @@ export async function getAssistantReply(params: {
       } catch (groqErr) {
         if (!(groqErr instanceof GroqRateLimitError)) throw groqErr;
         console.error("Groq backup also failed after Gemini:", groqErr);
-        return blankResult(
-          "Gemini (your default) is unavailable, and Groq — its backup — has also hit its limit right now. Please try again in a moment.",
-          droppedMessages
+        throw new Error(
+          "Gemini (your default) is unavailable, and Groq — its backup — has also hit its limit right now. Please try again in a moment."
         );
       }
     }
@@ -1525,11 +1539,11 @@ export async function getAssistantReply(params: {
       // transiently overloaded right when Groq needed backup), but dumping
       // that raw error into the chat isn't useful — a plain, honest message
       // beats a stack of JSON. Still worth logging why, same reasoning as
-      // the mirrored catch above.
+      // the mirrored catch above. Thrown (rather than returned as a normal
+      // 200 reply) so the client's retry-button logic actually fires.
       console.error("Gemini backup also failed after Groq:", geminiErr);
-      return blankResult(
-        `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`,
-        droppedMessages
+      throw new Error(
+        `Groq's limit was reached${retrySuffix}, and Gemini — its backup — is also temporarily unavailable right now. Please try again in a moment.`
       );
     }
   }
