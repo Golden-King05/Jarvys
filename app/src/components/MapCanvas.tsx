@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import type { MapPoint, RegionMapData } from "../api";
 import { outerRings } from "../utils/geojson";
+import { statusColor } from "../utils/regionStatus";
 
 interface MapCanvasProps {
   points: MapPoint[];
@@ -11,6 +12,7 @@ interface MapCanvasProps {
   initialRegion?: { latitude: number; longitude: number };
   onMapPress?: (lat: number, lon: number) => void;
   onPointPress?: (point: MapPoint) => void;
+  onRegionPress?: (region: RegionMapData) => void;
   pendingMarker?: { lat: number; lon: number } | null;
 }
 
@@ -21,6 +23,13 @@ const DEFAULT_REGION = {
   longitudeDelta: 30,
 };
 
+function withAlpha(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 // Native map (iOS/Android) — react-native-maps defaults to Apple Maps on
 // iOS via PROVIDER_DEFAULT, so no API key is needed there.
 export default function MapCanvas({
@@ -30,6 +39,7 @@ export default function MapCanvas({
   initialRegion,
   onMapPress,
   onPointPress,
+  onRegionPress,
   pendingMarker,
 }: MapCanvasProps) {
   const mapRef = useRef<MapView>(null);
@@ -71,17 +81,20 @@ export default function MapCanvas({
       }
       onPress={(e) => onMapPress?.(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
     >
-      {regions?.flatMap((region, ri) =>
-        outerRings(region.geometry).map((ring, i) => (
+      {regions?.flatMap((region, ri) => {
+        const color = statusColor(region.status);
+        return outerRings(region.geometry).map((ring, i) => (
           <Polygon
             key={`region-${ri}-${i}`}
             coordinates={ring.map(([lon, lat]) => ({ latitude: lat, longitude: lon }))}
-            fillColor="rgba(41,128,185,0.25)"
-            strokeColor="#2980b9"
-            strokeWidth={2}
+            fillColor={withAlpha(color, 0.35)}
+            strokeColor={color}
+            strokeWidth={1.5}
+            tappable
+            onPress={() => onRegionPress?.(region)}
           />
-        ))
-      )}
+        ));
+      })}
 
       {points.map((p, i) => (
         <Marker

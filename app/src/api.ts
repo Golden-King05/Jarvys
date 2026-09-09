@@ -38,10 +38,12 @@ export interface MapPoint {
 }
 
 export type RegionType = "us_state" | "country";
+export type RegionStatus = "green" | "yellow" | "red";
 
 export interface RegionMapData {
   name: string;
   geometry: { type: string; coordinates: unknown };
+  status?: RegionStatus;
 }
 
 export interface MapData {

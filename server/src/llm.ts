@@ -62,6 +62,11 @@ export interface MapPoint {
 export interface RegionMapData {
   name: string;
   geometry: { type: string; coordinates: unknown };
+  // Only set for a legal/categorical-status answer (e.g. "which states
+  // allow X") — green/allowed, yellow/permit or restricted, red/not
+  // allowed or not mentioned. Left undefined for a plain "show me these
+  // regions" answer, which the client renders in one neutral color.
+  status?: "green" | "yellow" | "red";
 }
 
 // Structured geo data from the map tools, for the Map screen to plot —

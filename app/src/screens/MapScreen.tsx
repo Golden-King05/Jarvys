@@ -11,7 +11,9 @@ import {
 import * as Location from "expo-location";
 import MapCanvas from "../components/MapCanvas";
 import PointDetailModal from "../components/PointDetailModal";
-import { api, type MapData, type MapPoint, type Point } from "../api";
+import RegionDetailModal from "../components/RegionDetailModal";
+import RegionLegend from "../components/RegionLegend";
+import { api, type MapData, type MapPoint, type Point, type RegionMapData } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 
@@ -39,6 +41,7 @@ export default function MapScreen({ mapData }: MapScreenProps) {
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
   const [points, setPoints] = useState<Point[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<Point | MapPoint | null>(null);
+  const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
 
   const [addStep, setAddStep] = useState<AddStep>("closed");
   const [pendingLocation, setPendingLocation] = useState<{ lat: number; lon: number } | null>(null);
@@ -211,6 +214,7 @@ export default function MapScreen({ mapData }: MapScreenProps) {
   const savedMarkers = points.map(toMapPoint);
   const markers = mapData?.kind === "distance" ? [...savedMarkers, ...mapData.points] : savedMarkers;
   const regions = mapData?.kind === "regions" ? mapData.regions : undefined;
+  const hasStatusLegend = regions?.some((r) => r.status) ?? false;
 
   return (
     <View style={styles.container}>
@@ -222,6 +226,7 @@ export default function MapScreen({ mapData }: MapScreenProps) {
           initialRegion={initialRegion}
           onMapPress={handleMapPress}
           onPointPress={setSelectedPoint}
+          onRegionPress={setSelectedRegion}
           pendingMarker={addStep === "details" ? pendingLocation : null}
         />
 
@@ -239,6 +244,8 @@ export default function MapScreen({ mapData }: MapScreenProps) {
         </TouchableOpacity>
       </View>
 
+      {hasStatusLegend ? <RegionLegend /> : null}
+
       {mapData && mapData.kind === "distance" && mapData.distanceMiles != null ? (
         <View style={styles.infoBox}>
           <Text style={styles.infoTitle}>
@@ -253,6 +260,7 @@ export default function MapScreen({ mapData }: MapScreenProps) {
         onClose={() => setSelectedPoint(null)}
         onDelete={selectedPoint && "id" in selectedPoint ? handleDeleteSelected : undefined}
       />
+      <RegionDetailModal region={selectedRegion} onClose={() => setSelectedRegion(null)} />
 
       <Modal
         visible={addStep === "choose"}

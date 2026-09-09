@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import type { MapPoint, RegionMapData } from "../api";
+import { statusColor } from "../utils/regionStatus";
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -41,6 +42,7 @@ interface MapCanvasProps {
   initialRegion?: { latitude: number; longitude: number };
   onMapPress?: (lat: number, lon: number) => void;
   onPointPress?: (point: MapPoint) => void;
+  onRegionPress?: (region: RegionMapData) => void;
   pendingMarker?: { lat: number; lon: number } | null;
 }
 
@@ -61,6 +63,7 @@ export default function MapCanvas({
   initialRegion,
   onMapPress,
   onPointPress,
+  onRegionPress,
   pendingMarker,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -104,9 +107,24 @@ export default function MapCanvas({
         L.geoJSON(
           {
             type: "FeatureCollection",
-            features: regions.map((r) => ({ type: "Feature", properties: { name: r.name }, geometry: r.geometry })),
+            features: regions.map((r) => ({
+              type: "Feature",
+              properties: { name: r.name, status: r.status },
+              geometry: r.geometry,
+            })),
           },
-          { style: { color: "#2980b9", weight: 2, fillColor: "#2980b9", fillOpacity: 0.25 } }
+          {
+            style: (feature: { properties: { status?: RegionMapData["status"] } }) => {
+              const color = statusColor(feature.properties.status);
+              return { color, weight: 1.5, fillColor: color, fillOpacity: 0.35 };
+            },
+            onEachFeature: (feature: { properties: { name: string } }, layer: Leaflet) => {
+              layer.on("click", () => {
+                const region = regions.find((r) => r.name === feature.properties.name);
+                if (region) onRegionPress?.(region);
+              });
+            },
+          }
         ).addTo(layer);
       }
 
@@ -139,7 +157,7 @@ export default function MapCanvas({
         if (layerBounds?.isValid?.()) map.fitBounds(layerBounds, { padding: [40, 40] });
       }
     });
-  }, [points, showLine, regions, pendingMarker, onPointPress]);
+  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }

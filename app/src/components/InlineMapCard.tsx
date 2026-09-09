@@ -2,7 +2,9 @@ import React, { useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MapCanvas from "./MapCanvas";
 import PointDetailModal from "./PointDetailModal";
-import type { MapData, MapPoint } from "../api";
+import RegionDetailModal from "./RegionDetailModal";
+import RegionLegend from "./RegionLegend";
+import type { MapData, MapPoint, RegionMapData } from "../api";
 import { fonts } from "../theme";
 
 interface InlineMapCardProps {
@@ -14,13 +16,21 @@ interface InlineMapCardProps {
 // of little maps.
 export default function InlineMapCard({ mapData }: InlineMapCardProps) {
   const [expanded, setExpanded] = useState(true);
-  const [selected, setSelected] = useState<MapPoint | null>(null);
+  const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
+  const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
+
+  const hasStatusLegend = mapData.kind === "regions" && (mapData.regions?.some((r) => r.status) ?? false);
 
   let summary: string;
   if (mapData.kind === "distance" && mapData.distanceMiles != null) {
     summary = `${mapData.points[0]?.label} → ${mapData.points[1]?.label}: ${mapData.distanceMiles} mi`;
   } else if (mapData.kind === "regions" && mapData.regions) {
-    summary = `${mapData.regions.length} region${mapData.regions.length === 1 ? "" : "s"} highlighted`;
+    const highlighted = hasStatusLegend
+      ? mapData.regions.filter((r) => r.status && r.status !== "red").length
+      : mapData.regions.length;
+    summary = hasStatusLegend
+      ? `${highlighted} region${highlighted === 1 ? "" : "s"} allowed or restricted`
+      : `${mapData.regions.length} region${mapData.regions.length === 1 ? "" : "s"} highlighted`;
   } else if (mapData.kind === "landmark") {
     summary = mapData.points[0]?.label ?? "Location found";
   } else {
@@ -36,16 +46,21 @@ export default function InlineMapCard({ mapData }: InlineMapCardProps) {
         <Text style={styles.toggle}>{expanded ? "Minimize" : "Expand"}</Text>
       </TouchableOpacity>
       {expanded ? (
-        <View style={styles.mapBox}>
-          <MapCanvas
-            points={mapData.points}
-            showLine={mapData.kind === "distance"}
-            regions={mapData.kind === "regions" ? mapData.regions : undefined}
-            onPointPress={setSelected}
-          />
-        </View>
+        <>
+          {hasStatusLegend ? <RegionLegend /> : null}
+          <View style={styles.mapBox}>
+            <MapCanvas
+              points={mapData.points}
+              showLine={mapData.kind === "distance"}
+              regions={mapData.kind === "regions" ? mapData.regions : undefined}
+              onPointPress={setSelectedPoint}
+              onRegionPress={setSelectedRegion}
+            />
+          </View>
+        </>
       ) : null}
-      <PointDetailModal point={selected} onClose={() => setSelected(null)} />
+      <PointDetailModal point={selectedPoint} onClose={() => setSelectedPoint(null)} />
+      <RegionDetailModal region={selectedRegion} onClose={() => setSelectedRegion(null)} />
     </View>
   );
 }
