@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ActivityIndicator, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Platform, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import {
   useFonts,
@@ -97,7 +97,44 @@ function Root() {
   return token ? <AuthedApp /> : <LoginScreen />;
 }
 
+// iOS Safari rubber-bands the whole page by default — nothing here uses that
+// scroll (every screen manages its own internal scrolling), so left alone it
+// just lets a stray swipe drag the entire app up/down past its own edges,
+// revealing blank space above or below and leaving things like the map
+// mid-drag until you scroll back. Locking html/body to the viewport size
+// with overflow hidden stops the outer page itself from ever scrolling.
+function useLockPageScrollOnWeb() {
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const html = document.documentElement;
+    const prevHtml = { overflow: html.style.overflow, height: html.style.height };
+    const prevBody = {
+      overflow: document.body.style.overflow,
+      position: document.body.style.position,
+      width: document.body.style.width,
+      height: document.body.style.height,
+    };
+    html.style.overflow = "hidden";
+    html.style.height = "100%";
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.width = "100%";
+    document.body.style.height = "100%";
+    // overscrollBehavior isn't in React Native Web's DOM style typings.
+    (document.body.style as unknown as { overscrollBehavior: string }).overscrollBehavior = "none";
+    return () => {
+      html.style.overflow = prevHtml.overflow;
+      html.style.height = prevHtml.height;
+      document.body.style.overflow = prevBody.overflow;
+      document.body.style.position = prevBody.position;
+      document.body.style.width = prevBody.width;
+      document.body.style.height = prevBody.height;
+    };
+  }, []);
+}
+
 export default function App() {
+  useLockPageScrollOnWeb();
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
