@@ -10,26 +10,40 @@ import {
 } from "@expo-google-fonts/inter";
 import { AuthProvider, useAuth } from "./src/AuthContext";
 import { fonts } from "./src/theme";
+import type { MapData } from "./src/api";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import MapScreen from "./src/screens/MapScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 
-type Tab = "chat" | "settings";
+type Tab = "chat" | "map" | "settings";
 
 function AuthedApp() {
   const [tab, setTab] = useState<Tab>("chat");
+  const [mapData, setMapData] = useState<MapData | null>(null);
 
   return (
     <View style={styles.flex}>
       <View style={styles.tabBar}>
-        <TouchableOpacity onPress={() => setTab("chat")}>
-          <Text style={tab === "chat" ? styles.tabActive : styles.tab}>Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setTab("settings")}>
-          <Text style={tab === "settings" ? styles.tabActive : styles.tab}>Settings</Text>
+        <View style={styles.tabGroup}>
+          <TouchableOpacity onPress={() => setTab("chat")}>
+            <Text style={tab === "chat" ? styles.tabActive : styles.tab}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setTab("map")}>
+            <Text style={tab === "map" ? styles.tabActive : styles.tab}>Map</Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity onPress={() => setTab("settings")} hitSlop={8}>
+          <Text style={styles.gearIcon}>⚙</Text>
         </TouchableOpacity>
       </View>
-      {tab === "chat" ? <HomeScreen /> : <SettingsScreen />}
+      <View style={styles.flex}>
+        <View style={[styles.flex, tab !== "chat" && styles.hidden]}>
+          <HomeScreen onMapData={setMapData} />
+        </View>
+        {tab === "map" ? <MapScreen mapData={mapData} /> : null}
+        {tab === "settings" ? <SettingsScreen /> : null}
+      </View>
     </View>
   );
 }
@@ -76,15 +90,19 @@ export default function App() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  hidden: { display: "none" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   tabBar: {
     flexDirection: "row",
-    justifyContent: "center",
-    gap: 24,
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
+  tabGroup: { flexDirection: "row", gap: 24 },
   tab: { fontFamily: fonts.regular, fontSize: 16, color: "#888" },
   tabActive: { fontFamily: fonts.semiBold, fontSize: 16, color: "#000" },
+  gearIcon: { fontSize: 20, color: "#444" },
 });

@@ -17,7 +17,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { api, type Provider } from "../api";
+import { api, type MapData, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { readRecordingAsBase64, speak, stopSpeaking } from "../voice";
 import { fonts } from "../theme";
@@ -63,7 +63,11 @@ function renderFormattedText(text: string) {
   );
 }
 
-export default function HomeScreen() {
+interface HomeScreenProps {
+  onMapData: (data: MapData) => void;
+}
+
+export default function HomeScreen({ onMapData }: HomeScreenProps) {
   const { baseUrl, token } = useAuth();
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -116,6 +120,7 @@ export default function HomeScreen() {
       setMessages((prev) => [...prev, { from: "system", text: switchText }]);
     }
     if (result.provider) setLastProvider(result.provider);
+    if (result.mapData) onMapData(result.mapData);
 
     setMessages((prev) => [...prev, { from: "assistant", text: result.reply! }]);
     if (!muted) speak(result.reply!);

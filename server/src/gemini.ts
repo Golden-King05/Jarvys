@@ -1,5 +1,6 @@
 import { incrementProviderUsage } from "./db.js";
-import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit } from "./llm.js";
+import { calculateDistance, findPlaces } from "./geo.js";
+import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -29,6 +30,35 @@ const SEARCH_WIKIPEDIA_TOOL = {
           query: { type: "string", description: "What to search for on Wikipedia." },
         },
         required: ["query"],
+      },
+    },
+    {
+      name: "find_places",
+      description:
+        "Find restaurants, cafes, bars, or fast food places near a location and plot them on the user's map. Use this when the user asks to find or recommend places to eat or drink somewhere.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to search near, e.g. a city or address." },
+          category: {
+            type: "string",
+            description: "What kind of place, e.g. restaurant, cafe, bar, fast food. Defaults to restaurant.",
+          },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "calculate_distance",
+      description:
+        "Calculate the straight-line distance between two locations and plot both on the user's map. Use this when the user asks how far apart two places are.",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "The first location." },
+          to: { type: "string", description: "The second location." },
+        },
+        required: ["from", "to"],
       },
     },
   ],
@@ -61,15 +91,57 @@ interface GeminiResponse {
   };
 }
 
-async function executeTool(call: GeminiFunctionCall): Promise<unknown> {
-  if (call.name !== "search_wikipedia") {
-    return { error: `Unknown tool: ${call.name}` };
+async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown; mapData: MapData | null }> {
+  const args = call.args ?? {};
+
+  if (call.name === "search_wikipedia") {
+    const query = args.query;
+    if (typeof query !== "string" || !query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    return { result: await searchWikipedia(query), mapData: null };
   }
-  const query = call.args?.query;
-  if (typeof query !== "string" || !query) {
-    return { error: "Missing required 'query' argument" };
+
+  if (call.name === "find_places") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const category = typeof args.category === "string" && args.category ? args.category : "restaurant";
+    const result = await findPlaces(location, category);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "places",
+        points: result.places.map((p) => ({ label: p.name, lat: p.lat, lon: p.lon, address: p.address })),
+      },
+    };
   }
-  return searchWikipedia(query);
+
+  if (call.name === "calculate_distance") {
+    const from = args.from;
+    const to = args.to;
+    if (typeof from !== "string" || !from || typeof to !== "string" || !to) {
+      return { result: { error: "Missing required 'from'/'to' arguments" }, mapData: null };
+    }
+    const result = await calculateDistance(from, to);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "distance",
+        points: [
+          { label: from, lat: result.from.lat, lon: result.from.lon },
+          { label: to, lat: result.to.lat, lon: result.to.lon },
+        ],
+        distanceMiles: result.distanceMiles,
+        distanceKm: result.distanceKm,
+      },
+    };
+  }
+
+  return { result: { error: `Unknown tool: ${call.name}` }, mapData: null };
 }
 
 async function geminiDailyRateLimit(): Promise<DailyRateLimit> {
@@ -105,6 +177,7 @@ export async function getGeminiReply(params: {
       thinkingRequest: null,
       provider: "gemini",
       providerNote: null,
+      mapData: null,
     };
   }
 
@@ -117,6 +190,7 @@ export async function getGeminiReply(params: {
   ];
 
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let mapData: MapData | null = null;
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     const res = await fetch(`${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
@@ -169,11 +243,13 @@ export async function getGeminiReply(params: {
         thinkingRequest: null,
         provider: "gemini",
         providerNote: null,
+        mapData,
       };
     }
 
     contents.push({ role: "model", parts });
-    const result = await executeTool(functionCallPart.functionCall);
+    const { result, mapData: toolMapData } = await executeTool(functionCallPart.functionCall);
+    if (toolMapData) mapData = toolMapData;
     contents.push({
       role: "user",
       parts: [
@@ -197,5 +273,6 @@ export async function getGeminiReply(params: {
     thinkingRequest: null,
     provider: "gemini",
     providerNote: null,
+    mapData,
   };
 }

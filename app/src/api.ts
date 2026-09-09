@@ -25,6 +25,20 @@ export interface ThinkingRequest {
 
 export type Provider = "groq" | "gemini";
 
+export interface MapPoint {
+  label: string;
+  lat: number;
+  lon: number;
+  address?: string;
+}
+
+export interface MapData {
+  kind: "places" | "distance";
+  points: MapPoint[];
+  distanceMiles?: number;
+  distanceKm?: number;
+}
+
 export interface ChatResponse {
   reply: string | null;
   usage: ChatUsage | null;
@@ -34,6 +48,7 @@ export interface ChatResponse {
   thinkingRequest: ThinkingRequest | null;
   provider: Provider | null;
   providerNote: string | null;
+  mapData: MapData | null;
 }
 
 export interface StoredMessage {

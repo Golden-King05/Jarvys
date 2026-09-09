@@ -9,7 +9,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.jarvys.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Jarvys uses the microphone so you can talk to your assistant."
+        "NSMicrophoneUsageDescription": "Jarvys uses the microphone so you can talk to your assistant.",
+        "NSLocationWhenInUseUsageDescription": "Jarvys uses your location to center the map near you."
       }
     },
     "web": {
@@ -21,7 +22,13 @@
     "plugins": [
       "expo-audio",
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Jarvys uses your location to center the map near you."
+        }
+      ]
     ]
   }
 }

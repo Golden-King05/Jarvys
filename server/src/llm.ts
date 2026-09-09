@@ -1,3 +1,4 @@
+import { calculateDistance, findPlaces } from "./geo.js";
 import { getGeminiReply } from "./gemini.js";
 import { searchWikipedia } from "./wikipedia.js";
 
@@ -45,6 +46,22 @@ export interface ThinkingRequest {
 
 export type Provider = "groq" | "gemini";
 
+export interface MapPoint {
+  label: string;
+  lat: number;
+  lon: number;
+  address?: string;
+}
+
+// Structured geo data from find_places/calculate_distance, for the Map
+// screen to plot — separate from the natural-language reply describing it.
+export interface MapData {
+  kind: "places" | "distance";
+  points: MapPoint[];
+  distanceMiles?: number;
+  distanceKm?: number;
+}
+
 export interface ChatResult {
   reply: string | null;
   usage: ChatUsage | null;
@@ -61,6 +78,7 @@ export interface ChatResult {
   // rather than something the user asked for (approving deep thinking) — the
   // client already knows why in that case, this covers the case it doesn't.
   providerNote: string | null;
+  mapData: MapData | null;
 }
 
 class GroqRateLimitError extends Error {
@@ -105,6 +123,43 @@ const SEARCH_WIKIPEDIA_TOOL = {
         query: { type: "string", description: "What to search for on Wikipedia." },
       },
       required: ["query"],
+    },
+  },
+};
+
+const FIND_PLACES_TOOL = {
+  type: "function",
+  function: {
+    name: "find_places",
+    description:
+      "Find restaurants, cafes, bars, or fast food places near a location and plot them on the user's map. Use this when the user asks to find or recommend places to eat or drink somewhere.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "The place to search near, e.g. a city or address." },
+        category: {
+          type: "string",
+          description: "What kind of place, e.g. restaurant, cafe, bar, fast food. Defaults to restaurant.",
+        },
+      },
+      required: ["location"],
+    },
+  },
+};
+
+const CALCULATE_DISTANCE_TOOL = {
+  type: "function",
+  function: {
+    name: "calculate_distance",
+    description:
+      "Calculate the straight-line distance between two locations and plot both on the user's map. Use this when the user asks how far apart two places are.",
+    parameters: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "The first location." },
+        to: { type: "string", description: "The second location." },
+      },
+      required: ["from", "to"],
     },
   },
 };
@@ -179,20 +234,59 @@ async function checkDifficulty(apiKey: string, message: string): Promise<Difficu
   return { usage, rateLimit, thinkingRequest: { reason } };
 }
 
-async function executeTool(call: ToolCall): Promise<unknown> {
-  if (call.function.name !== "search_wikipedia") {
-    return { error: `Unknown tool: ${call.function.name}` };
-  }
-  let args: { query?: string };
+async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: MapData | null }> {
+  const name = call.function.name;
+  let args: Record<string, unknown>;
   try {
     args = JSON.parse(call.function.arguments);
   } catch {
-    return { error: "Could not parse tool arguments" };
+    return { result: { error: "Could not parse tool arguments" }, mapData: null };
   }
-  if (!args.query) {
-    return { error: "Missing required 'query' argument" };
+
+  if (name === "search_wikipedia") {
+    if (typeof args.query !== "string" || !args.query) {
+      return { result: { error: "Missing required 'query' argument" }, mapData: null };
+    }
+    return { result: await searchWikipedia(args.query), mapData: null };
   }
-  return searchWikipedia(args.query);
+
+  if (name === "find_places") {
+    if (typeof args.location !== "string" || !args.location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const category = typeof args.category === "string" && args.category ? args.category : "restaurant";
+    const result = await findPlaces(args.location, category);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "places",
+        points: result.places.map((p) => ({ label: p.name, lat: p.lat, lon: p.lon, address: p.address })),
+      },
+    };
+  }
+
+  if (name === "calculate_distance") {
+    if (typeof args.from !== "string" || !args.from || typeof args.to !== "string" || !args.to) {
+      return { result: { error: "Missing required 'from'/'to' arguments" }, mapData: null };
+    }
+    const result = await calculateDistance(args.from, args.to);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "distance",
+        points: [
+          { label: args.from, lat: result.from.lat, lon: result.from.lon },
+          { label: args.to, lat: result.to.lat, lon: result.to.lon },
+        ],
+        distanceMiles: result.distanceMiles,
+        distanceKm: result.distanceKm,
+      },
+    };
+  }
+
+  return { result: { error: `Unknown tool: ${name}` }, mapData: null };
 }
 
 // No real tokenizer on hand server-side; a rough chars/4 estimate is only used
@@ -220,6 +314,7 @@ export async function getAssistantReply(params: {
       thinkingRequest: null,
       provider: null,
       providerNote: null,
+      mapData: null,
     };
   }
 
@@ -233,6 +328,7 @@ export async function getAssistantReply(params: {
     `You are ${params.assistantName}, a helpful personal assistant.`,
     "Reply in plain conversational text — no markdown (no **bold**, headers, tables, or bullet lists with *dashes) since replies are shown as plain text and sometimes read aloud.",
     "You can look things up on Wikipedia with the search_wikipedia tool when a question needs a factual answer you're not confident about — mention naturally that you checked Wikipedia when you use it.",
+    "You can find nearby restaurants, cafes, bars, or fast food with the find_places tool, and calculate the straight-line distance between two locations with the calculate_distance tool — results from either also appear on the user's map, so mention that naturally.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -276,6 +372,7 @@ export async function getAssistantReply(params: {
     // interrupts its own answer to flag difficulty (see checkDifficulty).
     let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
     let rateLimit: DailyRateLimit | null = null;
+    let mapData: MapData | null = null;
 
     if (offerThinkingTool) {
       const check = await checkDifficulty(apiKey, params.message);
@@ -297,6 +394,7 @@ export async function getAssistantReply(params: {
           thinkingRequest: check.thinkingRequest,
           provider: null,
           providerNote: null,
+          mapData: null,
         };
       }
     }
@@ -307,7 +405,7 @@ export async function getAssistantReply(params: {
       { role: "user", content: params.message },
     ];
 
-    const tools = [SEARCH_WIKIPEDIA_TOOL];
+    const tools = [SEARCH_WIKIPEDIA_TOOL, FIND_PLACES_TOOL, CALCULATE_DISTANCE_TOOL];
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       const res = await fetch(GROQ_API_URL, {
@@ -376,12 +474,14 @@ export async function getAssistantReply(params: {
           thinkingRequest: null,
           provider: "groq",
           providerNote: null,
+          mapData,
         };
       }
 
       messages.push({ role: "assistant", content: message.content, tool_calls: message.tool_calls });
       for (const call of message.tool_calls) {
-        const result = await executeTool(call);
+        const { result, mapData: toolMapData } = await executeTool(call);
+        if (toolMapData) mapData = toolMapData;
         messages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -400,6 +500,7 @@ export async function getAssistantReply(params: {
       thinkingRequest: null,
       provider: "groq",
       providerNote: null,
+      mapData,
     };
   } catch (err) {
     if (!(err instanceof GroqRateLimitError)) {
