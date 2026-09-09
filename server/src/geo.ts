@@ -19,7 +19,7 @@ interface NominatimResult {
   display_name: string;
 }
 
-async function geocode(place: string): Promise<GeoPoint | { error: string }> {
+export async function geocode(place: string): Promise<GeoPoint | { error: string }> {
   const params = new URLSearchParams({ q: place, format: "json", limit: "1" });
   const res = await fetch(`${NOMINATIM_URL}?${params}`, { headers: { "User-Agent": USER_AGENT } });
   if (!res.ok) {

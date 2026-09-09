@@ -1,9 +1,11 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import type { MapPoint, RegionMapData } from "../api";
 import { outerRings } from "../utils/geojson";
+import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
+import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 
 interface MapCanvasProps {
   points: MapPoint[];
@@ -14,6 +16,8 @@ interface MapCanvasProps {
   onPointPress?: (point: MapPoint) => void;
   onRegionPress?: (region: RegionMapData) => void;
   pendingMarker?: { lat: number; lon: number } | null;
+  showRadar?: boolean;
+  showTimezoneBands?: boolean;
 }
 
 const DEFAULT_REGION = {
@@ -41,8 +45,25 @@ export default function MapCanvas({
   onPointPress,
   onRegionPress,
   pendingMarker,
+  showRadar,
+  showTimezoneBands,
 }: MapCanvasProps) {
   const mapRef = useRef<MapView>(null);
+  const [radarTemplate, setRadarTemplate] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showRadar) {
+      setRadarTemplate(null);
+      return;
+    }
+    let cancelled = false;
+    getRadarTileTemplate().then((template) => {
+      if (!cancelled) setRadarTemplate(template);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showRadar]);
 
   useEffect(() => {
     if (points.length > 1 && mapRef.current) {
@@ -81,6 +102,26 @@ export default function MapCanvas({
       }
       onPress={(e) => onMapPress?.(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
     >
+      {radarTemplate ? <UrlTile urlTemplate={radarTemplate} zIndex={1} /> : null}
+
+      {showTimezoneBands
+        ? getTimezoneBands().map((band) => (
+            <React.Fragment key={band.offset}>
+              <Polyline
+                coordinates={[
+                  { latitude: -85, longitude: band.westLon },
+                  { latitude: 85, longitude: band.westLon },
+                ]}
+                strokeColor="rgba(120,120,120,0.5)"
+                strokeWidth={1}
+              />
+              <Marker coordinate={{ latitude: 0, longitude: band.centerLon }} tracksViewChanges={false}>
+                <Text style={styles.tzLabel}>{formatOffset(band.offset)}</Text>
+              </Marker>
+            </React.Fragment>
+          ))
+        : null}
+
       {regions?.flatMap((region, ri) => {
         const color = statusColor(region.status);
         return outerRings(region.geometry).map((ring, i) => (
@@ -133,4 +174,11 @@ const styles = StyleSheet.create({
     borderColor: "#ddd",
   },
   markerEmoji: { fontSize: 18 },
+  tzLabel: {
+    fontSize: 11,
+    color: "#555",
+    backgroundColor: "rgba(255,255,255,0.85)",
+    paddingHorizontal: 4,
+    borderRadius: 4,
+  },
 });

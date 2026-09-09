@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from "react";
 import type { MapPoint, RegionMapData } from "../api";
+import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
+import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -44,6 +46,8 @@ interface MapCanvasProps {
   onPointPress?: (point: MapPoint) => void;
   onRegionPress?: (region: RegionMapData) => void;
   pendingMarker?: { lat: number; lon: number } | null;
+  showRadar?: boolean;
+  showTimezoneBands?: boolean;
 }
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
@@ -65,10 +69,14 @@ export default function MapCanvas({
   onPointPress,
   onRegionPress,
   pendingMarker,
+  showRadar,
+  showTimezoneBands,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
   const layerGroup = useRef<Leaflet>(null);
+  const radarLayerRef = useRef<Leaflet>(null);
+  const tzLayerRef = useRef<Leaflet>(null);
   const onMapPressRef = useRef(onMapPress);
   onMapPressRef.current = onMapPress;
 
@@ -158,6 +166,63 @@ export default function MapCanvas({
       }
     });
   }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress]);
+
+  // Radar and timezone bands live on their own persistent layers (not the
+  // layerGroup above, which gets torn down and rebuilt on every points/
+  // regions change) so toggling them doesn't refetch tiles or redraw bands
+  // every time something else on the map updates.
+  useEffect(() => {
+    let cancelled = false;
+    loadLeaflet().then(async (L) => {
+      const map = mapInstance.current;
+      if (!map) return;
+      if (showRadar) {
+        if (!radarLayerRef.current) {
+          const template = await getRadarTileTemplate();
+          if (cancelled || !template || !map) return;
+          radarLayerRef.current = L.tileLayer(template, { opacity: 0.6 }).addTo(map);
+        }
+      } else if (radarLayerRef.current) {
+        map.removeLayer(radarLayerRef.current);
+        radarLayerRef.current = null;
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showRadar]);
+
+  useEffect(() => {
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      if (!map) return;
+      if (showTimezoneBands) {
+        if (!tzLayerRef.current) {
+          const group = L.layerGroup();
+          for (const band of getTimezoneBands()) {
+            L.polyline(
+              [
+                [-85, band.westLon],
+                [85, band.westLon],
+              ],
+              { color: "#888", weight: 1, dashArray: "4 4" }
+            ).addTo(group);
+            L.marker([0, band.centerLon], {
+              icon: L.divIcon({
+                html: `<div style="font-size:11px;color:#555;background:rgba(255,255,255,0.85);padding:0 4px;border-radius:4px;white-space:nowrap;transform:translate(-50%,-50%)">${formatOffset(band.offset)}</div>`,
+                className: "",
+                iconSize: [0, 0],
+              }),
+            }).addTo(group);
+          }
+          tzLayerRef.current = group.addTo(map);
+        }
+      } else if (tzLayerRef.current) {
+        map.removeLayer(tzLayerRef.current);
+        tzLayerRef.current = null;
+      }
+    });
+  }, [showTimezoneBands]);
 
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
 }

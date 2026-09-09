@@ -3,6 +3,7 @@ import {
   Modal,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -57,6 +58,10 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
   const [detailsDraft, setDetailsDraft] = useState({ name: "", category: "", subcategory: "", icon: "📍", blurb: "" });
   const [submitting, setSubmitting] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+
+  const [showLayers, setShowLayers] = useState(false);
+  const [showRadar, setShowRadar] = useState(false);
+  const [showTimezoneBands, setShowTimezoneBands] = useState(false);
 
   useEffect(() => {
     if (mapData) return; // The AI's plotted points drive the view instead once there are any.
@@ -229,6 +234,8 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
           onPointPress={setSelectedPoint}
           onRegionPress={setSelectedRegion}
           pendingMarker={addStep === "details" ? pendingLocation : null}
+          showRadar={showRadar}
+          showTimezoneBands={showTimezoneBands}
         />
 
         {addStep === "awaiting-tap" ? (
@@ -239,6 +246,10 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
             </TouchableOpacity>
           </View>
         ) : null}
+
+        <TouchableOpacity style={styles.layersButton} onPress={() => setShowLayers(true)}>
+          <Text style={styles.layersButtonText}>🗂️</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity style={styles.addButton} onPress={() => setAddStep("choose")}>
           <Text style={styles.addButtonText}>+</Text>
@@ -272,6 +283,35 @@ export default function MapScreen({ mapData, onVerifyMap }: MapScreenProps) {
         onDelete={selectedPoint && "id" in selectedPoint ? handleDeleteSelected : undefined}
       />
       <RegionDetailModal region={selectedRegion} onClose={() => setSelectedRegion(null)} />
+
+      <Modal visible={showLayers} transparent animationType="fade" onRequestClose={() => setShowLayers(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Layers</Text>
+              <TouchableOpacity onPress={() => setShowLayers(false)} hitSlop={8}>
+                <Text style={styles.closeIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Weather radar</Text>
+                <Text style={styles.layerHint}>Live precipitation (RainViewer)</Text>
+              </View>
+              <Switch value={showRadar} onValueChange={setShowRadar} />
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>Time zones</Text>
+                <Text style={styles.layerHint}>Approximate — not exact borders</Text>
+              </View>
+              <Switch value={showTimezoneBands} onValueChange={setShowTimezoneBands} />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={addStep === "choose"}
@@ -448,6 +488,22 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   addButtonText: { color: "#fff", fontSize: 28, lineHeight: 30, fontFamily: fonts.medium },
+  layersButton: {
+    position: "absolute",
+    left: 16,
+    bottom: 16,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ddd",
+    justifyContent: "center",
+    alignItems: "center",
+    elevation: 4,
+    zIndex: 1000,
+  },
+  layersButtonText: { fontSize: 22 },
   tapBanner: {
     position: "absolute",
     top: 12,
@@ -477,7 +533,20 @@ const styles = StyleSheet.create({
   infoTitle: { fontFamily: fonts.semiBold, fontSize: 14, color: "#222" },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center" },
   card: { backgroundColor: "#fff", borderRadius: 16, padding: 20, width: 320, maxWidth: "90%", maxHeight: "80%" },
+  cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   cardTitle: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222", marginBottom: 14 },
+  closeIcon: { fontFamily: fonts.medium, fontSize: 16, color: "#888" },
+  layerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  layerLabelBox: { flex: 1, marginRight: 12 },
+  layerLabel: { fontFamily: fonts.medium, fontSize: 14, color: "#222" },
+  layerHint: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 2 },
   choiceButton: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#eee" },
   choiceText: { fontFamily: fonts.medium, fontSize: 14, color: "#2980b9" },
   cancelLink: { marginTop: 14, alignSelf: "flex-start" },

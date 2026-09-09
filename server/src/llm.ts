@@ -1,6 +1,8 @@
+import { convertCurrency } from "./currency.js";
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
+import { getConditions } from "./weather.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -224,6 +226,53 @@ const VERIFY_MAP_TOOL = {
   },
 };
 
+const GET_WEATHER_TOOL = {
+  type: "function",
+  function: {
+    name: "get_weather",
+    description: "Get current weather conditions for a location. Also drops a pin on the user's map.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "The place to check, e.g. a city or address." },
+      },
+      required: ["location"],
+    },
+  },
+};
+
+const GET_LOCAL_TIME_TOOL = {
+  type: "function",
+  function: {
+    name: "get_local_time",
+    description: "Get the current local time and timezone for a location. Also drops a pin on the user's map.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: { type: "string", description: "The place to check, e.g. a city or address." },
+      },
+      required: ["location"],
+    },
+  },
+};
+
+const CONVERT_CURRENCY_TOOL = {
+  type: "function",
+  function: {
+    name: "convert_currency",
+    description: "Convert an amount from one currency to another using current exchange rates.",
+    parameters: {
+      type: "object",
+      properties: {
+        amount: { type: "number", description: "The amount to convert." },
+        from: { type: "string", description: "The source currency code, e.g. USD." },
+        to: { type: "string", description: "The target currency code, e.g. EUR." },
+      },
+      required: ["amount", "from", "to"],
+    },
+  },
+};
+
 const DIFFICULTY_CLASSIFIER_PROMPT =
   'Classify whether the user message needs careful multi-step reasoning to answer correctly: a logic puzzle with many interacting constraints, a nontrivial proof, competition-level math, or writing/debugging real code. Everyday questions, conversation, simple facts, and simple arithmetic do NOT count. Reply with exactly "NO" if it does not need that, or "YES: <short reason, under 12 words>" if it does. Reply with nothing else.';
 
@@ -411,6 +460,61 @@ async function executeTool(call: ToolCall): Promise<{ result: unknown; mapData: 
     return { result: { verified: true }, mapData: verified.mapData };
   }
 
+  if (name === "get_weather") {
+    if (typeof args.location !== "string" || !args.location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getConditions(args.location);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: result.icon,
+            category: "weather",
+            blurb: `${result.temperatureF}°F, ${result.condition}. Humidity ${result.humidity}%, wind ${result.windMph} mph.`,
+          },
+        ],
+      },
+    };
+  }
+
+  if (name === "get_local_time") {
+    if (typeof args.location !== "string" || !args.location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getConditions(args.location);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result: { location: result.location, timezone: result.timezone, localTime: result.localTime },
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: "🕒",
+            category: "time zone",
+            blurb: `Local time: ${result.localTime} (${result.timezone}, ${result.timezoneAbbreviation})`,
+          },
+        ],
+      },
+    };
+  }
+
+  if (name === "convert_currency") {
+    if (typeof args.amount !== "number" || typeof args.from !== "string" || typeof args.to !== "string") {
+      return { result: { error: "Missing required 'amount'/'from'/'to' arguments" }, mapData: null };
+    }
+    return { result: await convertCurrency(args.amount, args.from, args.to), mapData: null };
+  }
+
   return { result: { error: `Unknown tool: ${name}` }, mapData: null };
 }
 
@@ -457,6 +561,7 @@ export async function getAssistantReply(params: {
     "When a factual answer from search_wikipedia is about a specific real-world place, it may also drop a pin on the user's map automatically.",
     "When the answer to a question is naturally a set of US states or countries (e.g. every state where something is legal), answer normally in text AND call highlight_regions with the full list so it also shades them on the map — you determine the list yourself, the tool only draws it.",
     "If the user asks to verify, double-check, reload, or fill in a states/countries map more exactly — including right after you or they just brought one up — call verify_map with the topic and regionType inferred from the conversation so far; it checks every region individually rather than a quick pass.",
+    "You can check current weather with get_weather and the current local time with get_local_time — both also drop a pin on the user's map. You can also convert between currencies with convert_currency using live exchange rates.",
     params.instructions ? `Follow these instructions from your user: ${params.instructions}` : null,
   ]
     .filter(Boolean)
@@ -539,6 +644,9 @@ export async function getAssistantReply(params: {
       CALCULATE_DISTANCE_TOOL,
       HIGHLIGHT_REGIONS_TOOL,
       VERIFY_MAP_TOOL,
+      GET_WEATHER_TOOL,
+      GET_LOCAL_TIME_TOOL,
+      CONVERT_CURRENCY_TOOL,
     ];
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {

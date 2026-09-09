@@ -1,7 +1,9 @@
+import { convertCurrency } from "./currency.js";
 import { incrementProviderUsage } from "./db.js";
 import { calculateDistance, categoryIcon, findPlaces } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, MapData } from "./llm.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
+import { getConditions } from "./weather.js";
 import { searchWikipedia } from "./wikipedia.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -101,6 +103,41 @@ const SEARCH_WIKIPEDIA_TOOL = {
           },
         },
         required: ["topic", "regionType"],
+      },
+    },
+    {
+      name: "get_weather",
+      description: "Get current weather conditions for a location. Also drops a pin on the user's map.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to check, e.g. a city or address." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "get_local_time",
+      description: "Get the current local time and timezone for a location. Also drops a pin on the user's map.",
+      parameters: {
+        type: "object",
+        properties: {
+          location: { type: "string", description: "The place to check, e.g. a city or address." },
+        },
+        required: ["location"],
+      },
+    },
+    {
+      name: "convert_currency",
+      description: "Convert an amount from one currency to another using current exchange rates.",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: { type: "number", description: "The amount to convert." },
+          from: { type: "string", description: "The source currency code, e.g. USD." },
+          to: { type: "string", description: "The target currency code, e.g. EUR." },
+        },
+        required: ["amount", "from", "to"],
       },
     },
   ],
@@ -319,6 +356,66 @@ async function executeTool(call: GeminiFunctionCall): Promise<{ result: unknown;
     const verified = await verifyRegionStatuses(topic, regionType);
     if ("error" in verified) return { result: verified, mapData: null };
     return { result: { verified: true }, mapData: verified.mapData };
+  }
+
+  if (call.name === "get_weather") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getConditions(location);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result,
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: result.icon,
+            category: "weather",
+            blurb: `${result.temperatureF}°F, ${result.condition}. Humidity ${result.humidity}%, wind ${result.windMph} mph.`,
+          },
+        ],
+      },
+    };
+  }
+
+  if (call.name === "get_local_time") {
+    const location = args.location;
+    if (typeof location !== "string" || !location) {
+      return { result: { error: "Missing required 'location' argument" }, mapData: null };
+    }
+    const result = await getConditions(location);
+    if ("error" in result) return { result, mapData: null };
+    return {
+      result: { location: result.location, timezone: result.timezone, localTime: result.localTime },
+      mapData: {
+        kind: "landmark",
+        points: [
+          {
+            label: result.location,
+            lat: result.lat,
+            lon: result.lon,
+            icon: "🕒",
+            category: "time zone",
+            blurb: `Local time: ${result.localTime} (${result.timezone}, ${result.timezoneAbbreviation})`,
+          },
+        ],
+      },
+    };
+  }
+
+  if (call.name === "convert_currency") {
+    const amount = args.amount;
+    const from = args.from;
+    const to = args.to;
+    if (typeof amount !== "number" || typeof from !== "string" || typeof to !== "string") {
+      return { result: { error: "Missing required 'amount'/'from'/'to' arguments" }, mapData: null };
+    }
+    return { result: await convertCurrency(amount, from, to), mapData: null };
   }
 
   return { result: { error: `Unknown tool: ${call.name}` }, mapData: null };
