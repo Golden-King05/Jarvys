@@ -90,6 +90,18 @@ export interface GeocodeResult {
   lon: number;
 }
 
+export type OsmElementType = "node" | "way" | "relation";
+
+// A single tagged OpenStreetMap element — a node, way, or relation with at
+// least a name — as returned by the map's "OpenStreetMap" layer query.
+export interface OsmElement {
+  osmType: OsmElementType;
+  osmId: number;
+  lat: number;
+  lon: number;
+  tags: Record<string, string>;
+}
+
 export interface WikipediaArticle {
   pageid: number;
   title: string;
@@ -310,6 +322,17 @@ export const api = {
   // A direct "find this place" lookup — backs the map's search bar.
   geocode: (baseUrl: string, token: string, query: string) =>
     request<GeocodeResult>(baseUrl, `/geocode?q=${encodeURIComponent(query)}`, { token }),
+
+  // Every named OSM node/way/relation in a viewport — backs the map's
+  // "OpenStreetMap" layer. Called on demand (its "Query" button), not
+  // polled, since browsing raw OSM data is a deliberate action rather than
+  // something that should keep re-fetching as the map moves.
+  getNearbyOsm: (baseUrl: string, token: string, box: MapBoundingBox, limit = 200) =>
+    request<{ elements: OsmElement[]; areaTooLarge: boolean }>(
+      baseUrl,
+      `/osm/nearby?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}&limit=${limit}`,
+      { token }
+    ),
 
   createPoint: (baseUrl: string, token: string, point: NewPoint) =>
     request<Point>(baseUrl, "/points", { method: "POST", token, body: point }),

@@ -1,11 +1,13 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from "../api";
 import { useAuth } from "../AuthContext";
 import { outerRings } from "../utils/geojson";
+import { inferOsmCategory, osmElementKey, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
+import { suggestIcon } from "../utils/suggestIcon";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
 
@@ -50,6 +52,13 @@ interface MapCanvasProps {
   // area.
   showWikipedia?: boolean;
   onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
+  // Shows raw OpenStreetMap data fetched on demand (the Layers panel's
+  // "Query" button, via a ref call) rather than saved points — the caller
+  // owns the fetched elements (clustered) so an import can remove just that
+  // one element afterward, unlike the self-polling flights/Wikipedia layers.
+  showOsm?: boolean;
+  osmClusters?: OsmCluster[];
+  onOsmClusterPress?: (cluster: OsmCluster) => void;
   // Shows the user's live position (a native blue dot via react-native-maps,
   // backed by Apple/Google's own location layer) — the caller is
   // responsible for having already secured permission before turning this
@@ -78,6 +87,14 @@ interface MapCanvasProps {
   flyTo?: { lat: number; lon: number } | null;
 }
 
+// Exposed via ref so the screen's "Query" button can ask for the current
+// viewport on demand — the OSM layer is fetched on request, not polled, so
+// there's no reason for MapCanvas to own that fetch itself the way it does
+// for flights/Wikipedia.
+export interface MapCanvasHandle {
+  getViewportBounds: () => Promise<LatLonBox | null>;
+}
+
 const DEFAULT_REGION = {
   latitude: 39.8283,
   longitude: -98.5795,
@@ -102,27 +119,33 @@ function zoomFromLongitudeDelta(delta: number): number {
 
 // Native map (iOS/Android) — react-native-maps defaults to Apple Maps on
 // iOS via PROVIDER_DEFAULT, so no API key is needed there.
-export default function MapCanvas({
-  points,
-  showLine,
-  regions,
-  initialRegion,
-  onMapPress,
-  onPointPress,
-  onRegionPress,
-  onPointDragEnd,
-  pendingMarker,
-  showRadar,
-  showTimezoneBands,
-  showPins = true,
-  showFlights,
-  showWikipedia,
-  onWikipediaClusterPress,
-  showLiveLocation,
-  minPinZoom,
-  focusKey,
-  flyTo,
-}: MapCanvasProps) {
+const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function MapCanvas(
+  {
+    points,
+    showLine,
+    regions,
+    initialRegion,
+    onMapPress,
+    onPointPress,
+    onRegionPress,
+    onPointDragEnd,
+    pendingMarker,
+    showRadar,
+    showTimezoneBands,
+    showPins = true,
+    showFlights,
+    showWikipedia,
+    onWikipediaClusterPress,
+    showOsm,
+    osmClusters = [],
+    onOsmClusterPress,
+    showLiveLocation,
+    minPinZoom,
+    focusKey,
+    flyTo,
+  }: MapCanvasProps,
+  ref
+) {
   const { baseUrl, token } = useAuth();
   const mapRef = useRef<MapView>(null);
   const hasFitInitially = useRef(false);
@@ -275,6 +298,19 @@ export default function MapCanvas({
     );
   }, [flyTo]);
 
+  useImperativeHandle(ref, () => ({
+    getViewportBounds: async () => {
+      const bounds = await mapRef.current?.getMapBoundaries();
+      if (!bounds) return null;
+      return {
+        south: bounds.southWest.latitude,
+        west: bounds.southWest.longitude,
+        north: bounds.northEast.latitude,
+        east: bounds.northEast.longitude,
+      };
+    },
+  }));
+
   return (
     <MapView
       ref={mapRef}
@@ -391,6 +427,26 @@ export default function MapCanvas({
           ))
         : null}
 
+      {showOsm
+        ? osmClusters.map((c) => (
+            <Marker
+              key={`osm-${osmElementKey(c.elements[0])}`}
+              coordinate={{ latitude: c.lat, longitude: c.lon }}
+              onPress={() => onOsmClusterPress?.(c)}
+              tracksViewChanges={false}
+            >
+              <View style={styles.markerBubble}>
+                <Text style={styles.markerEmoji}>{iconForOsmCluster(c)}</Text>
+                {c.elements.length > 1 ? (
+                  <View style={styles.markerBadge}>
+                    <Text style={styles.markerBadgeText}>{c.elements.length}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </Marker>
+          ))
+        : null}
+
       {pendingMarker ? (
         <Marker coordinate={{ latitude: pendingMarker.lat, longitude: pendingMarker.lon }} pinColor="#e67e22" />
       ) : null}
@@ -404,6 +460,19 @@ export default function MapCanvas({
       ) : null}
     </MapView>
   );
+});
+
+export default MapCanvas;
+
+// A single-element cluster gets its inferred category's icon (matching what
+// the import form would default to); an untagged/mixed cluster falls back
+// to a generic pin rather than guessing from whichever element sorted first.
+function iconForOsmCluster(cluster: OsmCluster): string {
+  if (cluster.elements.length === 1) {
+    const { category, subcategory } = inferOsmCategory(cluster.elements[0].tags);
+    return suggestIcon(category, subcategory) ?? "📍";
+  }
+  return "📍";
 }
 
 const styles = StyleSheet.create({

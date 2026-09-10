@@ -1,8 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from "../api";
 import { useAuth } from "../AuthContext";
+import { inferOsmCategory, osmElementKey, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
+import { suggestIcon } from "../utils/suggestIcon";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
 
@@ -80,6 +82,13 @@ interface MapCanvasProps {
   // area.
   showWikipedia?: boolean;
   onWikipediaClusterPress?: (cluster: WikipediaCluster) => void;
+  // Shows raw OpenStreetMap data fetched on demand (the Layers panel's
+  // "Query" button, via a ref call) rather than saved points — the caller
+  // owns the fetched elements (clustered) so an import can remove just that
+  // one element afterward, unlike the self-polling flights/Wikipedia layers.
+  showOsm?: boolean;
+  osmClusters?: OsmCluster[];
+  onOsmClusterPress?: (cluster: OsmCluster) => void;
   // Shows the user's live position via the browser's own Geolocation API —
   // the caller is responsible for having already secured permission (the
   // browser prompts natively on the first watchPosition call regardless).
@@ -105,6 +114,14 @@ interface MapCanvasProps {
   // place; a new object reference (even for the same coordinates searched
   // twice) is what re-triggers the pan.
   flyTo?: { lat: number; lon: number } | null;
+}
+
+// Exposed via ref so the screen's "Query" button can ask for the current
+// viewport on demand — the OSM layer is fetched on request, not polled, so
+// there's no reason for MapCanvas to own that fetch itself the way it does
+// for flights/Wikipedia.
+export interface MapCanvasHandle {
+  getViewportBounds: () => Promise<LatLonBox | null>;
 }
 
 const DEFAULT_CENTER: [number, number] = [39.8283, -98.5795];
@@ -137,27 +154,44 @@ function emojiIconWithBadge(L: Leaflet, icon: string, count: number) {
   });
 }
 
-export default function MapCanvas({
-  points,
-  showLine,
-  regions,
-  initialRegion,
-  onMapPress,
-  onPointPress,
-  onRegionPress,
-  onPointDragEnd,
-  pendingMarker,
-  showRadar,
-  showTimezoneBands,
-  showPins = true,
-  showFlights,
-  showWikipedia,
-  onWikipediaClusterPress,
-  showLiveLocation,
-  minPinZoom,
-  focusKey,
-  flyTo,
-}: MapCanvasProps) {
+// A single-element cluster gets its inferred category's icon (matching what
+// the import form would default to); an untagged/mixed cluster falls back
+// to a generic pin rather than guessing from whichever element sorted first.
+function iconForOsmCluster(cluster: OsmCluster): string {
+  if (cluster.elements.length === 1) {
+    const { category, subcategory } = inferOsmCategory(cluster.elements[0].tags);
+    return suggestIcon(category, subcategory) ?? "📍";
+  }
+  return "📍";
+}
+
+const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function MapCanvas(
+  {
+    points,
+    showLine,
+    regions,
+    initialRegion,
+    onMapPress,
+    onPointPress,
+    onRegionPress,
+    onPointDragEnd,
+    pendingMarker,
+    showRadar,
+    showTimezoneBands,
+    showPins = true,
+    showFlights,
+    showWikipedia,
+    onWikipediaClusterPress,
+    showOsm,
+    osmClusters = [],
+    onOsmClusterPress,
+    showLiveLocation,
+    minPinZoom,
+    focusKey,
+    flyTo,
+  }: MapCanvasProps,
+  ref
+) {
   const { baseUrl, token } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
@@ -299,8 +333,28 @@ export default function MapCanvas({
           { color: "#2980b9", weight: 3 }
         ).addTo(layer);
       }
+
+      if (showOsm) {
+        osmClusters.forEach((c) => {
+          L.marker([c.lat, c.lon], { icon: emojiIconWithBadge(L, iconForOsmCluster(c), c.elements.length) })
+            .addTo(layer)
+            .on("click", () => onOsmClusterPress?.(c));
+        });
+      }
     });
-  }, [points, showLine, regions, pendingMarker, onPointPress, onRegionPress, onPointDragEnd, shouldShowPins]);
+  }, [
+    points,
+    showLine,
+    regions,
+    pendingMarker,
+    onPointPress,
+    onRegionPress,
+    onPointDragEnd,
+    shouldShowPins,
+    showOsm,
+    osmClusters,
+    onOsmClusterPress,
+  ]);
 
   // Fits once, the first time there's anything to show — not on every
   // subsequent points/regions change, since refreshing the same points
@@ -566,5 +620,21 @@ export default function MapCanvas({
     };
   }, [showLiveLocation]);
 
+  useImperativeHandle(ref, () => ({
+    getViewportBounds: async () => {
+      const map = mapInstance.current;
+      if (!map) return null;
+      const bounds = map.getBounds();
+      return {
+        south: bounds.getSouth(),
+        west: bounds.getWest(),
+        north: bounds.getNorth(),
+        east: bounds.getEast(),
+      };
+    },
+  }));
+
   return <div ref={containerRef} style={{ flex: 1, width: "100%", height: "100%" }} />;
-}
+});
+
+export default MapCanvas;

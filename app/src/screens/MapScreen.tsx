@@ -12,7 +12,9 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
-import MapCanvas from "../components/MapCanvas";
+import MapCanvas, { type MapCanvasHandle } from "../components/MapCanvas";
+import OsmClusterModal from "../components/OsmClusterModal";
+import OsmTagPicker from "../components/OsmTagPicker";
 import PointDetailModal from "../components/PointDetailModal";
 import RegionDetailModal from "../components/RegionDetailModal";
 import RegionLegend from "../components/RegionLegend";
@@ -23,6 +25,7 @@ import {
   isSavedPoint,
   type MapData,
   type MapPoint,
+  type OsmElement,
   type Point,
   type PointTag,
   type RegionMapData,
@@ -30,6 +33,7 @@ import {
 } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
+import { clusterOsmElements, inferOsmCategory, osmElementKey, osmElementName, type OsmCluster } from "../utils/osm";
 import { suggestIcon } from "../utils/suggestIcon";
 
 interface MapScreenProps {
@@ -48,9 +52,11 @@ interface MapScreenProps {
   setShowFlights: (v: boolean) => void;
   showWikipedia: boolean;
   setShowWikipedia: (v: boolean) => void;
+  showOsm: boolean;
+  setShowOsm: (v: boolean) => void;
 }
 
-type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "awaiting-tap";
+type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "osm-import" | "awaiting-tap";
 
 function toMapPoint(p: Point): MapPoint {
   return {
@@ -80,13 +86,36 @@ export default function MapScreen({
   setShowFlights,
   showWikipedia,
   setShowWikipedia,
+  showOsm,
+  setShowOsm,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
+  const mapCanvasRef = useRef<MapCanvasHandle>(null);
   const [initialRegion, setInitialRegion] = useState<{ latitude: number; longitude: number } | undefined>();
   const [points, setPoints] = useState<Point[]>([]);
   const [selectedPoint, setSelectedPoint] = useState<Point | MapPoint | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<RegionMapData | null>(null);
   const [selectedWikiCluster, setSelectedWikiCluster] = useState<WikipediaCluster | null>(null);
+
+  // Raw OSM elements fetched by the "Query" button — kept as a flat,
+  // deduped-by-id list (not pre-clustered) so repeated queries as the user
+  // pans around merge cleanly; clusterOsmElements groups them for display.
+  // Deliberately not polled like flights/Wikipedia — querying live OSM data
+  // is a deliberate action, not something that should keep re-fetching.
+  const [osmElements, setOsmElements] = useState<OsmElement[]>([]);
+  const osmClusters = useMemo(() => clusterOsmElements(osmElements), [osmElements]);
+  const [osmQuerying, setOsmQuerying] = useState(false);
+  const [osmStatus, setOsmStatus] = useState<string | null>(null);
+  const [selectedOsmCluster, setSelectedOsmCluster] = useState<OsmCluster | null>(null);
+  const [osmDraft, setOsmDraft] = useState<{
+    element: OsmElement;
+    name: string;
+    category: string;
+    subcategory: string;
+    icon: string;
+    otherTags: Record<string, string>;
+    selectedTagKeys: string[];
+  } | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -232,6 +261,7 @@ export default function MapScreen({
     setManualCoords({ lat: "", lon: "" });
     setUrlDraft({ url: "", name: "", category: "", subcategory: "", icon: "", tags: [] });
     setDetailsDraft({ name: "", category: "", subcategory: "", icon: "📍", blurb: "", tags: [] });
+    setOsmDraft(null);
     urlIconLocked.current = false;
     detailsIconLocked.current = false;
     setAddError(null);
@@ -247,6 +277,96 @@ export default function MapScreen({
     urlIconLocked.current = false;
     setUrlDraft({ url, name: title, category: "", subcategory: "", icon: "", tags: [] });
     setAddStep("url");
+  }
+
+  // The Layers panel's "Query" button — pulls current-viewport OSM data via
+  // the map's ref (rather than polling, since browsing raw OSM data is a
+  // deliberate, on-demand action) and merges it into the running set, deduped
+  // by element so pressing it again after panning accumulates rather than
+  // duplicates.
+  async function queryOsm() {
+    if (!token) return;
+    const bounds = await mapCanvasRef.current?.getViewportBounds();
+    if (!bounds) return;
+    setOsmQuerying(true);
+    setOsmStatus(null);
+    try {
+      const { elements, areaTooLarge } = await api.getNearbyOsm(baseUrl, token, bounds);
+      setOsmElements((prev) => {
+        const merged = new Map(prev.map((e) => [osmElementKey(e), e]));
+        for (const el of elements) merged.set(osmElementKey(el), el);
+        return [...merged.values()];
+      });
+      setOsmStatus(
+        areaTooLarge
+          ? "Zoomed out too far for full coverage — zoom in and query again for more."
+          : elements.length === 0
+            ? "No named OSM data found in view."
+            : null
+      );
+    } catch (e) {
+      setOsmStatus(e instanceof Error ? e.message : "Failed to query OpenStreetMap data");
+    } finally {
+      setOsmQuerying(false);
+    }
+  }
+
+  // The Layers panel's "Delete excess" button — clears whatever's still
+  // sitting on the OSM layer unimported. Anything the user did add already
+  // left this list the moment it was imported (see handleImportOsmElement),
+  // so everything left here is by definition "not added".
+  function deleteExcessOsm() {
+    setOsmElements([]);
+    setOsmStatus(null);
+  }
+
+  // Opens the import form for one specific OSM element, pre-filled from its
+  // own tags — a category/subcategory guessed from whichever OSM key most
+  // often says what a place is, an icon suggested from that, and every
+  // other raw tag offered as a pickable (not yet selected) point tag.
+  function handleAddOsmElement(element: OsmElement) {
+    const { category, subcategory } = inferOsmCategory(element.tags);
+    const { name: _name, ...otherTags } = element.tags;
+    setOsmDraft({
+      element,
+      name: osmElementName(element),
+      category,
+      subcategory,
+      icon: suggestIcon(category, subcategory) ?? "📍",
+      otherTags,
+      selectedTagKeys: [],
+    });
+    setAddStep("osm-import");
+  }
+
+  async function submitOsmImport() {
+    if (!osmDraft || !token) return;
+    if (!osmDraft.name.trim()) {
+      setAddError("Give it a name.");
+      return;
+    }
+    setSubmitting(true);
+    setAddError(null);
+    try {
+      await api.createPoint(baseUrl, token, {
+        name: osmDraft.name.trim(),
+        category: osmDraft.category.trim(),
+        subcategory: osmDraft.subcategory.trim(),
+        icon: osmDraft.icon.trim() || "📍",
+        lat: osmDraft.element.lat,
+        lon: osmDraft.element.lon,
+        tags: osmDraft.selectedTagKeys.map((key) => ({ key, value: osmDraft.otherTags[key] })),
+      });
+      const importedKey = osmElementKey(osmDraft.element);
+      setOsmElements((prev) => prev.filter((e) => osmElementKey(e) !== importedKey));
+      await loadPoints();
+      await loadTagKeys();
+      closeAddFlow();
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : "Failed to add point");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleSearch() {
@@ -506,6 +626,7 @@ export default function MapScreen({
     <View style={styles.container}>
       <View style={styles.mapWrap}>
         <MapCanvas
+          ref={mapCanvasRef}
           points={markers}
           showLine={mapData?.kind === "distance"}
           regions={regions}
@@ -521,11 +642,36 @@ export default function MapScreen({
           showFlights={showFlights}
           showWikipedia={showWikipedia}
           onWikipediaClusterPress={setSelectedWikiCluster}
+          showOsm={showOsm}
+          osmClusters={osmClusters}
+          onOsmClusterPress={setSelectedOsmCluster}
           showLiveLocation={showLiveLocation}
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
           flyTo={flyToTarget}
         />
+
+        {showOsm ? (
+          <View style={styles.osmBar}>
+            <View style={styles.osmButtonRow}>
+              <TouchableOpacity
+                style={[styles.osmButton, osmQuerying && styles.osmButtonDisabled]}
+                onPress={queryOsm}
+                disabled={osmQuerying}
+              >
+                <Text style={styles.osmButtonText}>{osmQuerying ? "Querying…" : "Query"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.osmButton, styles.osmButtonSecondary, osmElements.length === 0 && styles.osmButtonDisabled]}
+                onPress={deleteExcessOsm}
+                disabled={osmElements.length === 0}
+              >
+                <Text style={[styles.osmButtonText, styles.osmButtonSecondaryText]}>Delete excess</Text>
+              </TouchableOpacity>
+            </View>
+            {osmStatus ? <Text style={styles.osmStatusText}>{osmStatus}</Text> : null}
+          </View>
+        ) : null}
 
         <View style={styles.searchBar}>
           <TextInput
@@ -651,6 +797,14 @@ export default function MapScreen({
 
             <View style={styles.layerRow}>
               <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>OpenStreetMap</Text>
+                <Text style={styles.layerHint}>Query raw OSM data in view and import what you want</Text>
+              </View>
+              <Switch value={showOsm} onValueChange={setShowOsm} />
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
                 <Text style={styles.layerLabel}>Live location</Text>
                 <Text style={styles.layerHint}>
                   {liveLocationError ?? "Show your current position, updating as you move"}
@@ -666,6 +820,12 @@ export default function MapScreen({
         cluster={selectedWikiCluster}
         onClose={() => setSelectedWikiCluster(null)}
         onAddToMap={handleAddWikipediaArticle}
+      />
+
+      <OsmClusterModal
+        cluster={selectedOsmCluster}
+        onClose={() => setSelectedOsmCluster(null)}
+        onAddToMap={handleAddOsmElement}
       />
 
       <Modal
@@ -840,6 +1000,60 @@ export default function MapScreen({
           </ScrollView>
         </View>
       </Modal>
+
+      <Modal visible={addStep === "osm-import"} transparent animationType="fade" onRequestClose={closeAddFlow}>
+        <View style={styles.overlay}>
+          <ScrollView style={styles.card} contentContainerStyle={{ paddingBottom: 4 }}>
+            <Text style={styles.cardTitle}>Add from OpenStreetMap</Text>
+            {osmDraft ? (
+              <>
+                <Text style={styles.coordsLabel}>
+                  {osmDraft.element.osmType} {osmDraft.element.osmId} · {osmDraft.element.lat.toFixed(5)},{" "}
+                  {osmDraft.element.lon.toFixed(5)}
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Name"
+                  value={osmDraft.name}
+                  onChangeText={(v) => setOsmDraft((d) => (d ? { ...d, name: v } : d))}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Category"
+                  value={osmDraft.category}
+                  onChangeText={(v) => setOsmDraft((d) => (d ? { ...d, category: v } : d))}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Subcategory"
+                  value={osmDraft.subcategory}
+                  onChangeText={(v) => setOsmDraft((d) => (d ? { ...d, subcategory: v } : d))}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Icon emoji"
+                  value={osmDraft.icon}
+                  onChangeText={(v) => setOsmDraft((d) => (d ? { ...d, icon: v } : d))}
+                />
+                <OsmTagPicker
+                  tags={osmDraft.otherTags}
+                  selectedKeys={osmDraft.selectedTagKeys}
+                  onChange={(selectedTagKeys) => setOsmDraft((d) => (d ? { ...d, selectedTagKeys } : d))}
+                />
+              </>
+            ) : null}
+            {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
+            <View style={styles.formButtons}>
+              <TouchableOpacity onPress={closeAddFlow}>
+                <Text style={styles.cancelLinkText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.submitButton} onPress={submitOsmImport} disabled={submitting}>
+                <Text style={styles.submitButtonText}>{submitting ? "Saving…" : "Save"}</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -881,6 +1095,30 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   layersButtonText: { fontSize: 22 },
+  osmBar: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 80,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    padding: 10,
+    elevation: 4,
+    zIndex: 1000,
+  },
+  osmButtonRow: { flexDirection: "row", gap: 10 },
+  osmButton: {
+    flex: 1,
+    backgroundColor: "#2980b9",
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  osmButtonSecondary: { backgroundColor: "#fdecea" },
+  osmButtonDisabled: { opacity: 0.5 },
+  osmButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#fff" },
+  osmButtonSecondaryText: { color: "#c0392b" },
+  osmStatusText: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 8 },
   tapBanner: {
     position: "absolute",
     top: 68,

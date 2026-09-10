@@ -30,6 +30,7 @@ function AuthedApp() {
   const [showPins, setShowPins] = useState(true);
   const [showFlights, setShowFlights] = useState(false);
   const [showWikipedia, setShowWikipedia] = useState(false);
+  const [showOsm, setShowOsm] = useState(false);
 
   function handleLayerCommand(cmd: LayerCommand) {
     if (cmd.layer === "radar") setShowRadar(cmd.enabled);
@@ -75,6 +76,8 @@ function AuthedApp() {
             setShowFlights={setShowFlights}
             showWikipedia={showWikipedia}
             setShowWikipedia={setShowWikipedia}
+            showOsm={showOsm}
+            setShowOsm={setShowOsm}
           />
         ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}
