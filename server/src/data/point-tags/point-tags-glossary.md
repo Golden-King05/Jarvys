@@ -182,22 +182,31 @@ point; it isn't set on its own.
 
 ## amenity
 
-**What it means:** What a place currently functions as, when that's
-different from (or in addition to) its historical purpose. Not specific to
-military sites (see `military_installation` above for that case) — the
-same pattern applies to any building whose use changed: a house that's no
-longer lived in and is now a museum gets `building: yes`,
+**What it means:** What a place currently functions as. On its own this
+doesn't say the place used to be something else — `amenity: museum` by
+itself can just mean "there's a museum here," full stop. It only tells a
+repurposing story once it's paired with `current: no` on whatever tag
+describes the *original* use (`building_type`, `military_installation`,
+etc.): that combination is what says "no longer serves its original
+purpose — here's what it serves instead." Without `current: no` on that
+original-use tag, `amenity` is just an additional or simultaneous
+descriptor, not a change over time. Not specific to military sites (see
+`military_installation` above for that case) — the same combination works
+for any building: a house repurposed into a museum gets `building: yes`,
 `building_type: house`, `current: no`, `amenity: museum` — `current: no`
-says it's not a house anymore, `amenity: museum` says what it is now
-instead, and `building_type: house` still records what it used to be.
-Without the `amenity` tag, `current: no` alone would only say "not a house
-anymore," not what became of it.
+is what says it's not a house anymore, `amenity: museum` says what it is
+now instead, and `building_type: house` still records what it used to be.
+Drop the `current: no` and the same tags would instead describe a house
+that also happens to operate as a museum, not one that stopped being a
+house.
 
 **Values:** `museum;shop`
 
-`shop` is the equivalent case for a building repurposed into a shop rather
-than a museum — combine with `shop_type`/`shop_products` below to say what
-kind. More values will be added as other present-day-use cases come up.
+`shop` is the equivalent case for a building that now operates as a shop
+rather than a museum — same `current: no` rule applies for it to mean
+repurposed rather than "also a shop." Combine with `shop_type`/
+`shop_products` below to say what kind. More values will be added as other
+present-day-use cases come up.
 
 ## shop_type
 
