@@ -113,6 +113,18 @@ interface MapCanvasProps {
   // place; a new object reference (even for the same coordinates searched
   // twice) is what re-triggers the pan.
   flyTo?: { lat: number; lon: number } | null;
+  // Whether to auto-fit the camera the first time points/regions show up at
+  // all, with no explicit focusKey needed — on by default, which is exactly
+  // right for the chat's inline map card (a fresh instance per message,
+  // whose points never change afterward, so "the first time" and "an edit
+  // happened" can never be confused). The Map screen's persistent instance
+  // passes false: there, "points went from empty to non-empty" also
+  // describes what a normal add/edit's own refetch looks like, so relying on
+  // that shape to guess "is this the first load" caused a save to
+  // occasionally get mistaken for it and snap the camera back to fit every
+  // saved point — that screen instead fires an explicit focusKey bump itself,
+  // exactly once, right after its own first successful load.
+  autoFitOnFirstLoad?: boolean;
 }
 
 // Exposed via ref so the screen's "Query" button can ask for the current
@@ -188,6 +200,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     minPinZoom,
     focusKey,
     flyTo,
+    autoFitOnFirstLoad = true,
   }: MapCanvasProps,
   ref
 ) {
@@ -358,9 +371,13 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
   // Fits once, the first time there's anything to show — not on every
   // subsequent points/regions change, since refreshing the same points
   // after a tap, an edit, or a drag looks identical to "new content
-  // arrived" from the array alone. A deliberate re-fit (e.g. a brand new
-  // search result) goes through the focusKey effect below instead.
+  // arrived" from the array alone. Only for callers that want that guess
+  // (see autoFitOnFirstLoad above); the Map screen instead fires an
+  // explicit focusKey bump once it knows for certain this really is its
+  // first load. A deliberate re-fit (e.g. a brand new search result) goes
+  // through the focusKey effect below either way.
   useEffect(() => {
+    if (!autoFitOnFirstLoad) return;
     let cancelled = false;
     loadLeaflet().then((L) => {
       const map = mapInstance.current;

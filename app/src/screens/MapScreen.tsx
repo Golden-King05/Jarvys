@@ -291,6 +291,14 @@ export default function MapScreen({
   // emoji. Zooming in past roughly a metro-area view reveals them.
   const MIN_PIN_ZOOM = 8;
   const [focusSignal, setFocusSignal] = useState(0);
+  // Set once this screen's own first loadPoints() (below) resolves, so the
+  // camera fits to the saved points exactly once per visit to this tab —
+  // MapCanvas is told not to guess this itself (autoFitOnFirstLoad={false}
+  // below) because "points went from empty to non-empty" describes an
+  // ordinary add/edit's own refresh just as well as a first load, and
+  // guessing from that shape occasionally mistook one for the other,
+  // snapping the camera back to fit every saved point mid-edit.
+  const hasFitOnLoad = useRef(false);
 
   useEffect(() => {
     if (mapData) return; // The AI's plotted points drive the view instead once there are any.
@@ -319,6 +327,10 @@ export default function MapScreen({
     try {
       const { points: rows } = await api.getPoints(baseUrl, token);
       setPoints(rows);
+      if (!hasFitOnLoad.current) {
+        hasFitOnLoad.current = true;
+        setFocusSignal((n) => n + 1);
+      }
     } catch {
       // A failed refresh just leaves the last-known list on screen.
     }
@@ -833,6 +845,7 @@ export default function MapScreen({
           minPinZoom={MIN_PIN_ZOOM}
           focusKey={focusSignal}
           flyTo={flyToTarget}
+          autoFitOnFirstLoad={false}
         />
 
         {showOsm ? (
