@@ -1,9 +1,15 @@
 # Point tag glossary
 
-Reference for the `key`/`value` tags a saved [`Point`](../../server/src/db.ts) can carry
+Reference for the `key`/`value` tags a saved [`Point`](../../db.ts) can carry
 (the `PointTag` shape used by `propose_map_point`, the tag editor, and
 `point-tags.xlsx` in this folder). Each tag below lists its accepted values —
 a fixed set, or a format pattern — separated by `;` in the spreadsheet.
+
+This folder lives under `server/src/data/` (rather than a repo-root `docs/`)
+specifically so it ships with the deployed server build — `get_point_tag_reference`
+(in `server/src/pointTags.ts`) reads both files here directly at runtime,
+so there's exactly one copy of this vocabulary, not a third
+hand-maintained one for the assistant to drift out of sync with.
 
 **A single point's tag can itself hold more than one of those values at
 once** — join them with `;`, no space before or after it (`first;registered`,

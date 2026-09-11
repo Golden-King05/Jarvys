@@ -5,7 +5,7 @@ import { flightToMapPoint, getFlightsInBoundingBox } from "./flights.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
-import { POINT_TAG_REFERENCE } from "./pointTags.js";
+import { getPointTagReference } from "./pointTags.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
 import { searchWeb } from "./websearch.js";
@@ -1052,7 +1052,7 @@ async function executeTool(
   }
 
   if (name === "get_point_tag_reference") {
-    return { result: { reference: POINT_TAG_REFERENCE }, mapData: null };
+    return { result: { reference: await getPointTagReference() }, mapData: null };
   }
 
   if (name === "find_points_by_tag") {
