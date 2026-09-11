@@ -5,6 +5,7 @@ import { flightToMapPoint, getFlightsInBoundingBox } from "./flights.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import { getGeminiReply, verifyRegionStatuses } from "./gemini.js";
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
+import { POINT_TAG_REFERENCE } from "./pointTags.js";
 import { extractRegionsFromText, findRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
 import { searchWeb } from "./websearch.js";
@@ -513,6 +514,16 @@ const FIND_POINTS_BY_TAG_TOOL = {
       },
       required: ["key"],
     },
+  },
+};
+
+const GET_POINT_TAG_REFERENCE_TOOL = {
+  type: "function",
+  function: {
+    name: "get_point_tag_reference",
+    description:
+      "Get the full documented reference for this app's own point tags — every known tag header, its accepted values (or format), what it means, and how some combine with others (e.g. military_installation with military_installation_structure, or brand with brand_historic_location). Call this before tagging a point with propose_map_point when one of these documented tags might apply, or before answering a question that depends on them (e.g. 'where is the first McDonald's') — don't guess at a documented tag's exact values from memory.",
+    parameters: { type: "object", properties: {} },
   },
 };
 
@@ -1040,6 +1051,10 @@ async function executeTool(
     return { result: { keys: await getDistinctTagKeys(userId) }, mapData: null };
   }
 
+  if (name === "get_point_tag_reference") {
+    return { result: { reference: POINT_TAG_REFERENCE }, mapData: null };
+  }
+
   if (name === "find_points_by_tag") {
     if (typeof args.key !== "string" || !args.key) {
       return { result: { error: "Missing required 'key' argument" }, mapData: null };
@@ -1122,6 +1137,8 @@ function buildSystemPrompt(assistantName: string, instructions: string): string 
     "Before answering a factual question about one specific real-world place, or before calling propose_map_point for one, call find_saved_point first to check whether the user already has it saved — if so, use their saved note as your source and mention it's already on their map instead of searching elsewhere or suggesting a duplicate. If the saved match's blurb is empty or thin but its urls list includes a Wikipedia link, call get_wikipedia_article with that exact URL to get real content instead of guessing — it's more reliable than a fresh keyword search since you already know exactly which article it is.",
     "If the user asks you to find, locate, or list Wikipedia articles or landmarks across a whole area (a county, city, park — not one specific place), call find_wikipedia_articles_in_area instead of search_wikipedia; it previews every result on their map at once. Mention how many were found and ask if they'd like them added — if the tool result says the area was too large to fully cover, say so rather than implying the list is complete.",
     "Points can carry tags — header/value pairs like {key: 'architecture', value: 'Victorian'} or {key: 'start_date', value: '1886'} — for attributes worth searching on later. When you have something worth tagging on a point you're proposing with propose_map_point, call list_saved_tag_keys first and reuse a header already in use whenever one fits (e.g. always 'architecture', never a near-duplicate like 'building_architecture') — nothing else enforces that consistency. 'architecture' (an architectural style) and 'start_date' (when something was built or established, as a plain year like '1886' or a date) are common headers worth setting on landmarks and buildings when you know them; add other headers freely when something else about the place is worth tagging. If the user asks to find their points by some attribute (e.g. 'my Victorian buildings'), call find_points_by_tag.",
+    "Beyond architecture/start_date, this app has a growing documented set of standard tags (start_date, end_date, building, building_type, water_type, current, military_installation, military_installation_structure, amenity, brand, name, brand_historic_location) with fixed accepted values and specific meanings — call get_point_tag_reference for the full reference (values, meaning, how some combine) whenever tagging a point with propose_map_point might warrant one of these, or before answering a question that depends on one; don't guess at a documented tag's exact values from memory, since getting one wrong (e.g. inventing a value not in the real set) makes it useless for future searches. A tag's stored value can itself combine more than one applicable value, joined by ';' with no surrounding spaces (e.g. brand_historic_location: 'first;registered').",
+    "For a question like 'where is the first McDonald's' — a specific location of a named brand — call find_points_by_tag with key 'brand' and the brand's name as value; each match comes back with its full tags, so check brand_historic_location on each for 'first' (find_points_by_tag's value match is a substring, so searching 'first' there already also catches 'first_with_name' and 'first_without_name' in one call — see get_point_tag_reference for what those mean and how to pick between them if more than one location comes back). If nothing turns up — no matching brand tag at all, or none with a relevant brand_historic_location — say plainly that it doesn't look like it's saved on the map yet, then answer from your own general knowledge instead; don't call a web/Wikipedia search and present that as if it came from the user's map, and don't imply an answer is backed by their saved points when it isn't.",
     instructions ? `Follow these instructions from your user: ${instructions}` : null,
   ]
     .filter(Boolean)
@@ -1194,6 +1211,7 @@ const GROQ_TOOLS = [
   GET_WIKIPEDIA_ARTICLE_TOOL,
   LIST_SAVED_TAG_KEYS_TOOL,
   FIND_POINTS_BY_TAG_TOOL,
+  GET_POINT_TAG_REFERENCE_TOOL,
   GET_WEATHER_FORECAST_TOOL,
   GET_WEATHER_ALERTS_TOOL,
   GET_AIR_QUALITY_TOOL,

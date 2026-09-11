@@ -5,6 +5,7 @@ import { flightToMapPoint, getFlightsInBoundingBox } from "./flights.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
 import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, LayerCommand, MapData } from "./llm.js";
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
+import { POINT_TAG_REFERENCE } from "./pointTags.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
 import { getConditions, getForecast } from "./weather.js";
 import { searchWeb } from "./websearch.js";
@@ -244,6 +245,12 @@ const SEARCH_WIKIPEDIA_TOOL = {
         },
         required: ["key"],
       },
+    },
+    {
+      name: "get_point_tag_reference",
+      description:
+        "Get the full documented reference for this app's own point tags — every known tag header, its accepted values (or format), what it means, and how some combine with others (e.g. military_installation with military_installation_structure, or brand with brand_historic_location). Call this before tagging a point with propose_map_point when one of these documented tags might apply, or before answering a question that depends on them (e.g. 'where is the first McDonald's') — don't guess at a documented tag's exact values from memory.",
+      parameters: { type: "object", properties: {} },
     },
     {
       name: "get_weather_forecast",
@@ -868,6 +875,10 @@ async function executeTool(
 
   if (call.name === "list_saved_tag_keys") {
     return { result: { keys: await getDistinctTagKeys(userId) }, mapData: null };
+  }
+
+  if (call.name === "get_point_tag_reference") {
+    return { result: { reference: POINT_TAG_REFERENCE }, mapData: null };
   }
 
   if (call.name === "find_points_by_tag") {
