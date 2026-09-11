@@ -158,12 +158,14 @@ function splitLocationSuffix(query: string): { brandQuery: string; locationQuery
 // The brand_historic_location values this feature surfaces, and how much
 // each is worth when nothing else (an explicit location match) breaks a
 // tie — a true "first" beats a same-brand point that's merely first *in one
-// city* (municipality) or split across two locations (the with/without-name
-// pair), which in turn beat nothing.
+// country* (country) or *in one city* (municipality, narrower still than
+// country) or split across two locations (the with/without-name pair,
+// tied with plain "first" since both are still global claims).
 const HISTORIC_RANK: Record<string, number> = {
-  first: 3,
-  first_with_name: 2,
-  first_without_name: 2,
+  first: 4,
+  first_with_name: 3,
+  first_without_name: 3,
+  country: 2,
   municipality: 1,
 };
 
@@ -530,19 +532,24 @@ export default function MapScreen({
       if (brandRank < 0) continue;
 
       // A location was named ("...in Fort Wayne, Indiana") — this point has
-      // to actually be there, checked against its own addr:city/addr:state,
-      // or it's not a real match no matter how well the brand matched.
+      // to actually be there, checked against its own
+      // addr:city/addr:state/addr:country, or it's not a real match no
+      // matter how well the brand matched.
       let locationBonus = 0;
       if (locationTokens) {
         const city = p.tags.find((t) => t.key.toLowerCase() === "addr:city")?.value;
         const state = p.tags.find((t) => t.key.toLowerCase() === "addr:state")?.value;
+        const country = p.tags.find((t) => t.key.toLowerCase() === "addr:country")?.value;
         const cityMatched = !!city && tokensFuzzyContain(locationTokens, normalizeTokens(city));
         const stateMatched = !!state && tokensFuzzyContain(locationTokens, normalizeTokens(state));
-        if (!cityMatched && !stateMatched) continue;
+        const countryMatched = !!country && tokensFuzzyContain(locationTokens, normalizeTokens(country));
+        if (!cityMatched && !stateMatched && !countryMatched) continue;
         // A state named alongside a matching city is what disambiguates two
         // same-named cities in different states — worth far more than the
-        // brand/tag tiers below so it always wins the tie-break.
-        locationBonus = (cityMatched ? 100 : 0) + (stateMatched ? 100 : 0);
+        // brand/tag tiers below so it always wins the tie-break. A country
+        // match alone is the broadest, least specific signal, so it counts
+        // for less than a city/state match.
+        locationBonus = (cityMatched ? 100 : 0) + (stateMatched ? 100 : 0) + (countryMatched ? 50 : 0);
       }
 
       const score = locationBonus + HISTORIC_RANK[historicValue] * 10 + brandRank;
@@ -554,6 +561,7 @@ export default function MapScreen({
 
     const startDate = best.point.tags.find((t) => t.key.toLowerCase() === "start_date")?.value;
     const city = best.point.tags.find((t) => t.key.toLowerCase() === "addr:city")?.value;
+    const country = best.point.tags.find((t) => t.key.toLowerCase() === "addr:country")?.value;
     const headline =
       best.historicValue === "first"
         ? `This is the first ${best.brand}.`
@@ -561,7 +569,9 @@ export default function MapScreen({
           ? `The first official ${best.brand} is here.`
           : best.historicValue === "first_without_name"
             ? `This would become ${best.brand}'s first location.`
-            : `This is the first ${best.brand}${city ? ` in ${city}` : ""}.`;
+            : best.historicValue === "country"
+              ? `This is the first ${best.brand}${country ? ` in ${country}` : ""}.`
+              : `This is the first ${best.brand}${city ? ` in ${city}` : ""}.`;
     const message = startDate ? `${headline} It was established in ${startDate}.` : headline;
     return { point: best.point, message };
   }

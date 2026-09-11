@@ -20,12 +20,14 @@ one value genuinely applies to the same point at the same time (see
 lists document.
 
 **Free-text tags are the exception to underscores standing in for spaces:**
-`brand`, `name`, `website`, `wikipedia:*`, and the `addr:*` tags hold free
-text exactly as written — spaces, apostrophes, and all (`Shake Shack`,
-`McDonald's`, `123 Main St`) — rather than a value from a fixed,
-underscore_joined set. The spreadsheet marks these with a parenthetical
-description instead of a real `;`-separated list, e.g. `(free text — the
-brand's real name...)`.
+`brand`, `name`, `website`, `wikipedia:*`, `shop_products`,
+`product_or_type_notability`, and the `addr:*` tags hold free text exactly
+as written — spaces, apostrophes, and all (`Shake Shack`, `McDonald's`,
+`123 Main St`) — rather than a value from a fixed, underscore_joined set.
+The spreadsheet marks these with a parenthetical description instead of a
+real `;`-separated list, e.g. `(free text — the brand's real name...)`.
+`shop_products` and `product_or_type_notability` are also multi-value like
+`brand_historic_location` — free text *and* `;`-combinable at once.
 
 **The row right after a tag is sometimes labeled `Format` instead of
 `Values`.** That distinction matters: a `Values` row (without a leading
@@ -181,22 +183,84 @@ point; it isn't set on its own.
 ## amenity
 
 **What it means:** What a place currently functions as, when that's
-different from (or in addition to) its historical purpose — right now this
-only covers the museum case: a place that no longer serves its original
-purpose (`current: no`) but still stands and now operates as a museum. Not
-specific to military sites (see `military_installation` above for that
-case) — the same pattern applies to any building whose use changed: a house
-that's no longer lived in and is now a museum gets `building: yes`,
+different from (or in addition to) its historical purpose. Not specific to
+military sites (see `military_installation` above for that case) — the
+same pattern applies to any building whose use changed: a house that's no
+longer lived in and is now a museum gets `building: yes`,
 `building_type: house`, `current: no`, `amenity: museum` — `current: no`
 says it's not a house anymore, `amenity: museum` says what it is now
 instead, and `building_type: house` still records what it used to be.
 Without the `amenity` tag, `current: no` alone would only say "not a house
 anymore," not what became of it.
 
-**Values:** `museum`
+**Values:** `museum;shop`
 
-Only one value so far — more will be added as other present-day-use cases
-come up.
+`shop` is the equivalent case for a building repurposed into a shop rather
+than a museum — combine with `shop_type`/`shop_products` below to say what
+kind. More values will be added as other present-day-use cases come up.
+
+## shop_type
+
+**What it means:** The general category of a shop, for points where
+`amenity` is `shop` (or the point's own category otherwise says it's a
+shop). Deliberately excludes restaurant/fast-food categories — those
+aren't really "shops" in this sense and are covered by the point's own
+category/subcategory instead, not this tag.
+
+**Values:** `souvenir;ice_cream;fudge;clothing;grocery;jewelry;bookstore;toy;gift;antique;bakery;candy;hardware;pharmacy`
+
+This list is a starting set of common types, not exhaustive — add more as
+they come up. `fudge` and `grocery` are both included deliberately since
+each has genuine historic significance worth being able to tag precisely
+(see `shop_historic_location` below for real examples of both — Mackinac
+Island's fudge shops, and America's first grocery store).
+
+## shop_products
+
+**What it means:** The specific products a shop sells — narrower and more
+concrete than `shop_type`'s broader category. A fudge shop's `shop_type` is
+`fudge`; its `shop_products` might be `fudge;saltwater taffy;caramel apples`
+if it sells more than just fudge.
+
+**Values:** free text — separated by `;` for more than one product, spaces
+and all (`fudge;postcards;t-shirts`), the same combining convention as
+every other multi-value tag.
+
+## product_or_type_notability
+
+**What it means:** Exists specifically to pair with `shop_historic_location`
+below — says *which* `shop_type`/`shop_products` value a historic claim is
+actually about, for a shop that has more than one of either. A shop selling
+both fudge and ordinary souvenirs that's only historically first for its
+fudge (not for souvenirs in general) gets `product_or_type_notability: fudge`
+— without it, a `shop_historic_location: first` on a multi-product shop
+wouldn't say which product the "first" claim applies to.
+
+**Values:** free text — one or more `shop_type`/`shop_products` values,
+separated by `;` for more than one (e.g. `fudge` on its own, or
+`fudge;caramel apples` if the claim covers both).
+
+## shop_historic_location
+
+**What it means:** The `brand_historic_location` pattern (below), applied
+to a shop type or product instead of a chain brand — pairs with
+`product_or_type_notability` above to say what the claim is about, and
+usually with `shop_type`/`shop_products` to say what the shop sells at
+all. Works identically to `brand_historic_location`, same values and same
+combining-with-`;` rules — see that section for the full explanation of
+each value.
+
+**Values:** `first;first_without_name;first_with_name;municipality;country;registered;unique_location`
+
+**Worked example:** "the first place on Mackinac Island that made and sold
+fudge" — `shop_type: fudge` (or `shop_products: fudge`), `addr:city:
+Mackinac Island`, `shop_historic_location: municipality` (first *within
+that city* — see `municipality` under `brand_historic_location`, same
+idea), `product_or_type_notability: fudge` (in case the shop also sells
+other things, so the "first" claim clearly points at the fudge). "America's
+first grocery store" works the same way one level broader: `shop_type:
+grocery`, `addr:country: United States`, `shop_historic_location: country`,
+`product_or_type_notability: grocery`.
 
 ## brand
 
@@ -245,6 +309,10 @@ document.
   city/town, as opposed to the first one anywhere. Kilwins on Mackinac
   Island gets this: the first Kilwins on the island, though nowhere close
   to the first Kilwins overall.
+- `country` — the first location of this brand within a specific country,
+  the same idea as `municipality` one level broader — the first location
+  in a whole country, as opposed to the first one anywhere *or* just the
+  first one in one city.
 - `registered` — the location is listed on its country's official historic
   register (the National Register of Historic Places, for the US). Set
   alongside another value here when both apply — a location that's both
