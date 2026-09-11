@@ -130,6 +130,10 @@ export default function MapScreen({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<MapPoint | null>(null);
   const [flyToTarget, setFlyToTarget] = useState<{ lat: number; lon: number } | null>(null);
+  // Set instead of going through geocoding when the search matches a saved
+  // point tagged as a brand's first (or convoluted-first) location — see
+  // findHistoricBrandMatch below.
+  const [historicInfo, setHistoricInfo] = useState<{ icon: string; name: string; message: string } | null>(null);
 
   // Not lifted to App.tsx like the other layers — there's no reason for the
   // AI chat to toggle this the way it toggles radar/pins/flights, and
@@ -390,11 +394,67 @@ export default function MapScreen({
     }
   }
 
+  // A saved point tagged brand_historic_location (first / first_without_name
+  // / first_with_name) is a landmark in its own right — searching the brand
+  // name should surface it directly instead of just geocoding an address, no
+  // AI call needed since it's a straight lookup over already-loaded points.
+  // Matches on the brand tag when present (the chain's real name), falling
+  // back to the point's own name otherwise; an exact match beats a
+  // substring match so e.g. "McDonald's" doesn't get out-ranked by some
+  // unrelated point that merely mentions it.
+  function findHistoricBrandMatch(query: string): { point: Point; message: string } | null {
+    const q = query.trim().toLowerCase();
+    if (!q) return null;
+    let best: Point | null = null;
+    let bestRank = -1;
+    for (const p of points) {
+      const historic = p.tags.find((t) => t.key.toLowerCase() === "brand_historic_location")?.value;
+      if (!historic) continue;
+      const values = historic.split(";").map((v) => v.trim().toLowerCase());
+      if (!values.includes("first") && !values.includes("first_without_name") && !values.includes("first_with_name")) {
+        continue;
+      }
+      const brand = (p.tags.find((t) => t.key.toLowerCase() === "brand")?.value ?? p.name).toLowerCase();
+      const rank = brand === q ? 2 : brand.includes(q) || q.includes(brand) ? 1 : -1;
+      if (rank > bestRank) {
+        bestRank = rank;
+        best = p;
+      }
+    }
+    if (!best || bestRank < 0) return null;
+
+    const brand = best.tags.find((t) => t.key.toLowerCase() === "brand")?.value ?? best.name;
+    const historicValues = best.tags
+      .find((t) => t.key.toLowerCase() === "brand_historic_location")!
+      .value.split(";")
+      .map((v) => v.trim().toLowerCase());
+    const startDate = best.tags.find((t) => t.key.toLowerCase() === "start_date")?.value;
+
+    const headline = historicValues.includes("first")
+      ? `This is the first ${brand}.`
+      : historicValues.includes("first_with_name")
+        ? `The first official ${brand} is here.`
+        : `This would become ${brand}'s first location.`;
+    const message = startDate ? `${headline} It was established in ${startDate}.` : headline;
+    return { point: best, message };
+  }
+
   async function handleSearch() {
     const query = searchQuery.trim();
     if (!query || !token) return;
-    setSearching(true);
     setSearchError(null);
+
+    const historicMatch = findHistoricBrandMatch(query);
+    if (historicMatch) {
+      const { point, message } = historicMatch;
+      setHistoricInfo({ icon: point.icon, name: point.name, message });
+      setSearchResult({ label: point.name, lat: point.lat, lon: point.lon, icon: point.icon });
+      setFlyToTarget({ lat: point.lat, lon: point.lon });
+      return;
+    }
+    setHistoricInfo(null);
+
+    setSearching(true);
     try {
       const found = await api.geocode(baseUrl, token, query);
       setSearchResult({ label: found.name, lat: found.lat, lon: found.lon, icon: "🔍" });
@@ -414,6 +474,7 @@ export default function MapScreen({
     setSearchQuery("");
     setSearchResult(null);
     setSearchError(null);
+    setHistoricInfo(null);
   }
 
   async function toggleLiveLocation(value: boolean) {
@@ -716,6 +777,19 @@ export default function MapScreen({
         {searchError ? (
           <View style={styles.searchErrorBanner}>
             <Text style={styles.searchErrorText}>{searchError}</Text>
+          </View>
+        ) : null}
+        {historicInfo ? (
+          <View style={styles.historicBanner}>
+            <View style={styles.historicBannerBody}>
+              <Text style={styles.historicBannerTitle}>
+                {historicInfo.icon} {historicInfo.name}
+              </Text>
+              <Text style={styles.historicBannerText}>{historicInfo.message}</Text>
+            </View>
+            <TouchableOpacity onPress={() => setHistoricInfo(null)} hitSlop={8}>
+              <Text style={styles.searchClearText}>✕</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -1199,6 +1273,26 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   searchErrorText: { fontFamily: fonts.regular, fontSize: 12, color: "#8a291d" },
+  historicBanner: {
+    position: "absolute",
+    top: 60,
+    left: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e0c98a",
+    borderRadius: 8,
+    padding: 10,
+    elevation: 4,
+    zIndex: 1000,
+  },
+  historicBannerBody: { flex: 1 },
+  historicBannerTitle: { fontFamily: fonts.semiBold, fontSize: 13, color: "#222", marginBottom: 2 },
+  historicBannerText: { fontFamily: fonts.regular, fontSize: 12, color: "#555" },
   infoBox: { padding: 12, borderTopWidth: 1, borderTopColor: "#eee" },
   verifyButton: { alignSelf: "center", paddingVertical: 8 },
   verifyButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
