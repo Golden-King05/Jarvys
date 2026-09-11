@@ -79,16 +79,25 @@ category/subcategory when one of these types is recognizable there.
 ## military_installation
 
 **What it means:** Marks a point as a military site or a building
-belonging to one. Most values name the *type of the main installation
-itself* (a fort, a castle, an airbase). `military_installation_structure`
-is the one special value in the set — it doesn't name a type of
-installation at all, it flags a *secondary building* that's part of one
-without being the main structure (a barracks, a kitchen, a mess hall, a
-garage). That value alone only says "this is a secondary military
-building" — see `military_installation_structure` below for the separate
-tag that says *which kind*.
+belonging to one.
 
-**Values:** `military_installation_structure;fort;castle;airbase;base;camp;garrison;bunker;outpost`
+**Not all values here mean the same kind of thing.** Eight of the nine name
+an installation *type* — this point **is** a fort, **is** an airbase, and
+so on. `military_installation_structure` isn't a ninth type alongside
+them; it's a different kind of answer entirely, saying this point **is
+not** the installation — it's a secondary building that merely belongs to
+one. Picking it doesn't compete with picking `fort` or `airbase`: a fort's
+main structure gets `military_installation: fort`; its mess hall, sitting
+right next to it, gets `military_installation: military_installation_structure`,
+never `military_installation: fort` itself. That value alone only says
+"this is *some* secondary military building" — see
+`military_installation_structure` below for the separate tag that says
+*which kind*.
+
+**Values:**
+
+- Installation types (the point itself is the installation): `fort;castle;airbase;base;camp;garrison;bunker;outpost`
+- The one non-type value (the point is a secondary building, not the installation): `military_installation_structure`
 
 **Combines with `current` and `amenity`:** `current: no` on a military
 installation says it's no longer active, but not what became of the
