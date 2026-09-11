@@ -82,9 +82,11 @@ category/subcategory when one of these types is recognizable there.
 belonging to one. Most values name the *type of the main installation
 itself* (a fort, a castle, an airbase). `military_installation_structure`
 is the one special value in the set — it doesn't name a type of
-installation at all, it marks a *secondary building* that's part of one
-without being the main structure: a barracks, a kitchen, a mess hall, a
-garage.
+installation at all, it flags a *secondary building* that's part of one
+without being the main structure (a barracks, a kitchen, a mess hall, a
+garage). That value alone only says "this is a secondary military
+building" — see `military_installation_structure` below for the separate
+tag that says *which kind*.
 
 **Values:** `military_installation_structure;fort;castle;airbase;base;camp;garrison;bunker;outpost`
 
@@ -96,11 +98,31 @@ physical structure — still standing but repurposed, or gone entirely.
 active installation; the same fort with `current: no` and no `amenity` tag
 has simply fallen — no structure, no ongoing use.
 
-**Combines with `building`:** on a `military_installation_structure` point,
-`building` is `yes` when that secondary structure still physically stands,
-or `no` (alongside `current: no`) when it's been torn down — the tag still
-records that a building of that kind (a barracks, say) once stood there,
-even with nothing left of it.
+**Combines with `building`:** on a point tagged
+`military_installation: military_installation_structure`, `building` is
+`yes` when that secondary structure still physically stands, or `no`
+(alongside `current: no`) when it's been torn down — the tag still records
+that a building of that kind once stood there, even with nothing left of
+it.
+
+## military_installation_structure
+
+**What it means:** Its own tag, not just a value — this is a deliberate
+two-step process. `military_installation: military_installation_structure`
+is step one: it flags a point as *some* secondary building on a military
+site, not the main installation. This tag is step two: it says exactly
+which kind of secondary building it is. A point isn't fully tagged as a
+specific military structure until both are set; the two-step handoff is
+what lets one generic flag value on `military_installation` open into a
+whole breakdown of building types here, instead of needing a value on
+`military_installation` for every possible kind of building on a base.
+
+**Values:** `barracks;kitchen;mess_hall;garage;armory;watchtower;gatehouse;infirmary;stable;guardhouse`
+
+This list is a starting set of common types, not exhaustive — add more as
+they come up. Only meaningful alongside
+`military_installation: military_installation_structure` on the same
+point; it isn't set on its own.
 
 ## amenity
 
