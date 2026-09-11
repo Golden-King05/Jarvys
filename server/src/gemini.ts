@@ -3,7 +3,7 @@ import { convertCurrency } from "./currency.js";
 import { findMapPointsByName, findMapPointsByTag, getDistinctTagKeys, incrementProviderUsage, type PointTag } from "./db.js";
 import { flightToMapPoint, getFlightsInBoundingBox } from "./flights.js";
 import { calculateDistance, categoryIcon, findPlaces, geocode, geocodeArea } from "./geo.js";
-import type { ChatResult, ChatTurn, ChatUsage, DailyRateLimit, LayerCommand, MapData } from "./llm.js";
+import { didToolCallFail, type ChatResult, type ChatTurn, type ChatUsage, type DailyRateLimit, type LayerCommand, type MapData } from "./llm.js";
 import { getActiveAlerts, getNwsForecast } from "./nws.js";
 import { getPointTagReference } from "./pointTags.js";
 import { extractRegionsFromText, findRegions, getAllRegions, type RegionType } from "./regions.js";
@@ -973,6 +973,7 @@ export async function getGeminiReply(params: {
       mapData: null,
       layerCommand: null,
       toolsUsed: [],
+      toolsFailed: [],
     };
   }
 
@@ -987,7 +988,13 @@ export async function getGeminiReply(params: {
   let usageTotals = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let mapData: MapData | null = null;
   let layerCommand: LayerCommand | null = null;
+  // See the identical split in llm.ts's runGroqPath: calledTools tracks
+  // every call regardless of outcome (for propose_map_point's grounding
+  // check), toolsUsed/toolsFailed split on outcome for the client's
+  // API-used badge.
+  const calledTools = new Set<string>();
   const toolsUsed = new Set<string>();
+  const toolsFailed = new Set<string>();
   const forceForecastTool = looksLikeForecastRequest(params.message);
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -1051,6 +1058,7 @@ export async function getGeminiReply(params: {
         mapData,
         layerCommand,
         toolsUsed: [...toolsUsed],
+        toolsFailed: [...toolsFailed],
       };
     }
 
@@ -1059,8 +1067,13 @@ export async function getGeminiReply(params: {
       result,
       mapData: toolMapData,
       layerCommand: toolLayerCommand,
-    } = await executeTool(functionCallPart.functionCall, params.userId, toolsUsed);
-    toolsUsed.add(functionCallPart.functionCall.name);
+    } = await executeTool(functionCallPart.functionCall, params.userId, calledTools);
+    calledTools.add(functionCallPart.functionCall.name);
+    if (didToolCallFail(functionCallPart.functionCall.name, result)) {
+      toolsFailed.add(functionCallPart.functionCall.name);
+    } else {
+      toolsUsed.add(functionCallPart.functionCall.name);
+    }
     if (toolMapData) mapData = toolMapData;
     if (toolLayerCommand) layerCommand = toolLayerCommand;
     contents.push({
@@ -1089,5 +1102,6 @@ export async function getGeminiReply(params: {
     mapData,
     layerCommand,
     toolsUsed: [...toolsUsed],
+    toolsFailed: [...toolsFailed],
   };
 }

@@ -80,10 +80,11 @@ await db.executeMultiple(`
   CREATE INDEX IF NOT EXISTS idx_map_points_user ON map_points(user_id);
 `);
 
-// chat_messages predates map_data_json/tools_used_json — add them for
-// databases created before these columns existed. SQLite has no "ADD COLUMN
-// IF NOT EXISTS", so ignore the one error that means it's already there.
-for (const column of ["map_data_json", "tools_used_json"]) {
+// chat_messages predates map_data_json/tools_used_json/tools_failed_json —
+// add them for databases created before these columns existed. SQLite has
+// no "ADD COLUMN IF NOT EXISTS", so ignore the one error that means it's
+// already there.
+for (const column of ["map_data_json", "tools_used_json", "tools_failed_json"]) {
   try {
     await db.execute(`ALTER TABLE chat_messages ADD COLUMN ${column} TEXT`);
   } catch (err) {
@@ -142,6 +143,7 @@ export interface ChatMessageRow {
   content: string;
   map_data_json: string | null;
   tools_used_json: string | null;
+  tools_failed_json: string | null;
   created_at: string;
 }
 

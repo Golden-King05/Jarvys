@@ -32,6 +32,7 @@ interface Message {
   text: string;
   mapData?: MapData | null;
   toolsUsed?: string[];
+  toolsFailed?: string[];
 }
 
 interface UsageState {
@@ -115,6 +116,7 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
             text: m.content,
             mapData: m.mapData,
             toolsUsed: m.toolsUsed,
+            toolsFailed: m.toolsFailed,
           }))
         );
       })
@@ -146,7 +148,13 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
 
     setMessages((prev) => [
       ...prev,
-      { from: "assistant", text: result.reply!, mapData: result.mapData, toolsUsed: result.toolsUsed },
+      {
+        from: "assistant",
+        text: result.reply!,
+        mapData: result.mapData,
+        toolsUsed: result.toolsUsed,
+        toolsFailed: result.toolsFailed,
+      },
     ]);
     if (!muted) speak(result.reply!);
 
@@ -411,7 +419,9 @@ export default function HomeScreen({ onMapData, verifySignal, onLayerCommand }: 
             {m.mapData ? (
               <InlineMapCard mapData={m.mapData} onVerifyMap={() => sendMessage("Verify the map")} />
             ) : null}
-            {m.from === "assistant" && m.toolsUsed?.length ? <ApiUsedBadge toolsUsed={m.toolsUsed} /> : null}
+            {m.from === "assistant" && (m.toolsUsed?.length || m.toolsFailed?.length) ? (
+              <ApiUsedBadge toolsUsed={m.toolsUsed ?? []} toolsFailed={m.toolsFailed ?? []} />
+            ) : null}
           </View>
         ))}
         {thinking ? (

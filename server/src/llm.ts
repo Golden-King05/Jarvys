@@ -131,6 +131,14 @@ export interface ChatResult {
   // "API used" marker instead of having the model narrate its own sourcing
   // in the reply text.
   toolsUsed: string[];
+  // Names of tools that were called but came back empty-handed — an
+  // upstream API erroring, or (for find_saved_point/find_points_by_tag,
+  // which never themselves error) a map lookup that found nothing. Shown
+  // alongside toolsUsed rather than folded into it so the client can mark
+  // a source as attempted-and-failed instead of implying it contributed.
+  // The same tool name can appear in both arrays if the model called it
+  // more than once this turn with different outcomes.
+  toolsFailed: string[];
 }
 
 class GroqRateLimitError extends Error {
@@ -632,6 +640,25 @@ function parseTagsArg(value: unknown): PointTag[] | undefined {
     }
   }
   return tags;
+}
+
+// A tool's own result object only carries an `error` key when something
+// genuinely went wrong (a network failure, an upstream API being down) —
+// but find_saved_point/find_points_by_tag never error, they just come back
+// with no matches, which for "is this actually on the user's map" purposes
+// is the same kind of failure the API-used badge needs to surface. Shared
+// by both providers so a Wikipedia timeout looks the same whether Groq or
+// Gemini hit it.
+const EMPTY_MATCH_MEANS_FAILED = new Set(["find_saved_point", "find_points_by_tag"]);
+
+export function didToolCallFail(name: string, result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  if ("error" in result) return true;
+  if (EMPTY_MATCH_MEANS_FAILED.has(name) && "matches" in result) {
+    const matches = (result as { matches: unknown }).matches;
+    return Array.isArray(matches) && matches.length === 0;
+  }
+  return false;
 }
 
 async function executeTool(
@@ -1184,6 +1211,7 @@ function blankResult(reply: string, droppedMessages: number): ChatResult {
     mapData: null,
     layerCommand: null,
     toolsUsed: [],
+    toolsFailed: [],
   };
 }
 
@@ -1284,7 +1312,14 @@ async function runGroqPath(params: {
   let rateLimit: DailyRateLimit | null = null;
   let mapData: MapData | null = null;
   let layerCommand: LayerCommand | null = null;
+  // Every tool called this turn regardless of outcome — propose_map_point's
+  // grounding check (has search_wikipedia/search_web actually run yet?)
+  // cares only that the call happened, not whether it succeeded. Kept
+  // separate from toolsUsed/toolsFailed below, which split on outcome for
+  // the client's API-used badge.
+  const calledTools = new Set<string>();
   const toolsUsed = new Set<string>();
+  const toolsFailed = new Set<string>();
 
   if (offerThinkingTool) {
     const check = await checkDifficulty(apiKey, message);
@@ -1309,6 +1344,7 @@ async function runGroqPath(params: {
         mapData: null,
         layerCommand: null,
         toolsUsed: [],
+        toolsFailed: [],
       };
     }
   }
@@ -1400,13 +1436,19 @@ async function runGroqPath(params: {
         mapData: mapData ?? regionsFromReply(reply),
         layerCommand,
         toolsUsed: [...toolsUsed],
+        toolsFailed: [...toolsFailed],
       };
     }
 
     messages.push({ role: "assistant", content: responseMessage.content, tool_calls: responseMessage.tool_calls });
     for (const call of responseMessage.tool_calls) {
-      const { result, mapData: toolMapData, layerCommand: toolLayerCommand } = await executeTool(call, userId, toolsUsed);
-      toolsUsed.add(call.function.name);
+      const { result, mapData: toolMapData, layerCommand: toolLayerCommand } = await executeTool(call, userId, calledTools);
+      calledTools.add(call.function.name);
+      if (didToolCallFail(call.function.name, result)) {
+        toolsFailed.add(call.function.name);
+      } else {
+        toolsUsed.add(call.function.name);
+      }
       if (toolMapData) mapData = toolMapData;
       if (toolLayerCommand) layerCommand = toolLayerCommand;
       messages.push({
@@ -1430,6 +1472,7 @@ async function runGroqPath(params: {
     mapData,
     layerCommand,
     toolsUsed: [...toolsUsed],
+    toolsFailed: [...toolsFailed],
   };
 }
 

@@ -130,6 +130,12 @@ export interface ChatResponse {
   mapData: MapData | null;
   layerCommand: LayerCommand | null;
   toolsUsed: string[];
+  // Tools that were called but came back empty-handed this turn — an
+  // upstream API erroring, or a map lookup (find_saved_point/
+  // find_points_by_tag) that found nothing. A tool name can appear in both
+  // this and toolsUsed if it was called more than once with different
+  // outcomes.
+  toolsFailed: string[];
 }
 
 export interface StoredMessage {
@@ -138,6 +144,7 @@ export interface StoredMessage {
   createdAt: string;
   mapData: MapData | null;
   toolsUsed: string[];
+  toolsFailed: string[];
 }
 
 // A saved pin — user-placed, imported from a URL, or auto-backed-up from
