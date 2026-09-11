@@ -49,8 +49,32 @@ export function osmElementName(el: OsmElement): string {
 }
 
 // The handful of OSM keys that most often say what a place actually *is* —
+// also doubles as the "what to query" checklist in the Layers panel's OSM
+// settings (MapScreen), so a query can be narrowed to just a few of these
+// instead of every named element in the viewport, which is what was timing
+// out. Labels are only used there; findOsmElementsInArea/the server only
+// ever see the bare keys. Order here is display order in that checklist —
+// buildings and landmark-ish categories first since those are the most
+// commonly wanted, per the checklist's own request.
+export const OSM_CATEGORY_OPTIONS: { key: string; label: string }[] = [
+  { key: "building", label: "Buildings" },
+  { key: "tourism", label: "Tourism & landmarks" },
+  { key: "historic", label: "Historic sites" },
+  { key: "amenity", label: "Amenities (restaurants, schools, etc.)" },
+  { key: "shop", label: "Shops" },
+  { key: "leisure", label: "Leisure & recreation" },
+  { key: "office", label: "Offices" },
+  { key: "craft", label: "Craft businesses" },
+  { key: "man_made", label: "Man-made structures" },
+  { key: "natural", label: "Natural features" },
+  { key: "railway", label: "Railway" },
+  { key: "waterway", label: "Waterway" },
+  { key: "highway", label: "Roads" },
+];
+
 // checked in this order so the most specific match wins (e.g. an `amenity`
-// wins over an incidental `building=yes` on the same element).
+// wins over an incidental `building=yes` on the same element) — kept as its
+// own ordering (amenity-first) independent of the checklist's display order.
 const CATEGORY_KEYS = [
   "amenity",
   "shop",

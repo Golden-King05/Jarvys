@@ -352,11 +352,16 @@ export const api = {
   // Every named OSM node/way/relation in a viewport — backs the map's
   // "OpenStreetMap" layer. Called on demand (its "Query" button), not
   // polled, since browsing raw OSM data is a deliberate action rather than
-  // something that should keep re-fetching as the map moves.
-  getNearbyOsm: (baseUrl: string, token: string, box: MapBoundingBox, limit = 200) =>
+  // something that should keep re-fetching as the map moves. `categories`
+  // (from OSM_CATEGORY_OPTIONS, the layer's own settings gear) narrows the
+  // query to just those OSM keys instead of every named element, which is
+  // what was timing out on a busy viewport — omit it for the old
+  // unrestricted behavior.
+  getNearbyOsm: (baseUrl: string, token: string, box: MapBoundingBox, categories?: string[], limit = 200) =>
     request<{ elements: OsmElement[]; areaTooLarge: boolean }>(
       baseUrl,
-      `/osm/nearby?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}&limit=${limit}`,
+      `/osm/nearby?south=${box.south}&west=${box.west}&north=${box.north}&east=${box.east}&limit=${limit}` +
+        (categories && categories.length > 0 ? `&categories=${categories.join(",")}` : ""),
       { token }
     ),
 

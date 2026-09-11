@@ -64,20 +64,50 @@ const MAX_RESULTS = 300;
 // the connection outright.
 const OVERPASS_TIMEOUT_MS = 12000;
 
-// Fetches every named node/way/relation in the given area — the raw
-// material for the map's "OpenStreetMap" layer. Ways and relations come
-// back with Overpass's own computed centroid (the `center` output mode)
-// rather than their full geometry, which is all a single map pin needs.
+// The same allowlist as the client's OSM_CATEGORY_OPTIONS (app/src/utils/
+// osm.ts) — kept as its own copy here since this side's job is different
+// (a strict allowlist for building a raw Overpass query string, not display
+// labels) but the two must name the same OSM keys or a category selected in
+// the UI would silently do nothing.
+export const OSM_CATEGORY_KEYS = [
+  "amenity",
+  "shop",
+  "tourism",
+  "historic",
+  "leisure",
+  "natural",
+  "craft",
+  "office",
+  "man_made",
+  "railway",
+  "waterway",
+  "building",
+  "highway",
+] as const;
+
+// Fetches named node/way/relation in the given area — the raw material for
+// the map's "OpenStreetMap" layer. Ways and relations come back with
+// Overpass's own computed centroid (the `center` output mode) rather than
+// their full geometry, which is all a single map pin needs. `categories`
+// (validated against OSM_CATEGORY_KEYS by the route) narrows the query to
+// elements carrying at least one of those tag keys — querying literally
+// every named element regardless of tags was the previous behavior and is
+// what was timing out on a busy viewport.
 export async function findOsmElementsInArea(
   box: BoundingBox,
-  limit = MAX_RESULTS
+  limit = MAX_RESULTS,
+  categories?: string[]
 ): Promise<{ elements: OsmElement[]; areaTooLarge: boolean } | { error: string }> {
   const south = Math.max(box.south, box.north - MAX_BBOX_DEGREES);
   const west = Math.max(box.west, box.east - MAX_BBOX_DEGREES);
   const areaTooLarge = box.north - box.south > MAX_BBOX_DEGREES || box.east - box.west > MAX_BBOX_DEGREES;
 
   const bbox = `${south},${west},${box.north},${box.east}`;
-  const query = `[out:json][timeout:10];(node["name"](${bbox});way["name"](${bbox});relation["name"](${bbox}););out center tags;`;
+  const keyFilters = categories && categories.length > 0 ? categories.map((k) => `["${k}"]`) : [""];
+  const clauses = keyFilters
+    .flatMap((filter) => [`node["name"]${filter}(${bbox});`, `way["name"]${filter}(${bbox});`, `relation["name"]${filter}(${bbox});`])
+    .join("");
+  const query = `[out:json][timeout:10];(${clauses});out center tags;`;
 
   let data: OverpassResponse | null = null;
   const errors: string[] = [];

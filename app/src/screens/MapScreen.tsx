@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
+import { Ionicons } from "@expo/vector-icons";
 import MapCanvas, { type MapCanvasHandle } from "../components/MapCanvas";
 import OsmClusterModal from "../components/OsmClusterModal";
 import OsmTagPicker from "../components/OsmTagPicker";
@@ -39,6 +40,7 @@ import {
   inferOsmCategory,
   osmElementKey,
   osmElementName,
+  OSM_CATEGORY_OPTIONS,
   suggestOsmIcon,
   type OsmCluster,
 } from "../utils/osm";
@@ -199,6 +201,13 @@ export default function MapScreen({
   const [osmQuerying, setOsmQuerying] = useState(false);
   const [osmStatus, setOsmStatus] = useState<string | null>(null);
   const [selectedOsmCluster, setSelectedOsmCluster] = useState<OsmCluster | null>(null);
+  // Which OSM tag keys "Query" asks for — the settings gear between the
+  // Query/Delete excess buttons narrows this from "every named element in
+  // view" (all of OSM_CATEGORY_OPTIONS selected, the default) down to just
+  // the categories actually wanted, since an unfiltered query was what was
+  // timing out on a busy viewport.
+  const [osmCategories, setOsmCategories] = useState<string[]>(OSM_CATEGORY_OPTIONS.map((o) => o.key));
+  const [showOsmSettings, setShowOsmSettings] = useState(false);
   const [osmDraft, setOsmDraft] = useState<{
     element: OsmElement;
     name: string;
@@ -407,12 +416,16 @@ export default function MapScreen({
   // duplicates.
   async function queryOsm() {
     if (!token) return;
+    if (osmCategories.length === 0) {
+      setOsmStatus("Pick at least one category in OSM settings first.");
+      return;
+    }
     const bounds = await mapCanvasRef.current?.getViewportBounds();
     if (!bounds) return;
     setOsmQuerying(true);
     setOsmStatus(null);
     try {
-      const { elements, areaTooLarge } = await api.getNearbyOsm(baseUrl, token, bounds);
+      const { elements, areaTooLarge } = await api.getNearbyOsm(baseUrl, token, bounds, osmCategories);
       setOsmElements((prev) => {
         const merged = new Map(prev.map((e) => [osmElementKey(e), e]));
         for (const el of elements) merged.set(osmElementKey(el), el);
@@ -859,6 +872,13 @@ export default function MapScreen({
                 <Text style={styles.osmButtonText}>{osmQuerying ? "Querying…" : "Query"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                style={styles.osmSettingsButton}
+                onPress={() => setShowOsmSettings(true)}
+                hitSlop={8}
+              >
+                <Ionicons name="settings-outline" size={18} color="#444" />
+              </TouchableOpacity>
+              <TouchableOpacity
                 style={[styles.osmButton, styles.osmButtonSecondary, osmElements.length === 0 && styles.osmButtonDisabled]}
                 onPress={deleteExcessOsm}
                 disabled={osmElements.length === 0}
@@ -1022,6 +1042,57 @@ export default function MapScreen({
               </View>
               <Switch value={showLiveLocation} onValueChange={toggleLiveLocation} />
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showOsmSettings}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowOsmSettings(false)}
+      >
+        <View style={styles.overlay}>
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>OSM query settings</Text>
+              <TouchableOpacity onPress={() => setShowOsmSettings(false)} hitSlop={8}>
+                <Text style={styles.closeIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.osmSettingsHint}>
+              Which kinds of OSM data "Query" looks for — fewer categories means a faster, less likely to
+              time out query.
+            </Text>
+            <View style={styles.osmSelectAllRow}>
+              <TouchableOpacity onPress={() => setOsmCategories(OSM_CATEGORY_OPTIONS.map((o) => o.key))}>
+                <Text style={styles.osmSelectAllText}>Select all</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setOsmCategories([])}>
+                <Text style={styles.osmSelectAllText}>Unselect all</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.osmCategoryList}>
+              {OSM_CATEGORY_OPTIONS.map((option) => {
+                const checked = osmCategories.includes(option.key);
+                return (
+                  <TouchableOpacity
+                    key={option.key}
+                    style={styles.osmCategoryRow}
+                    onPress={() =>
+                      setOsmCategories((prev) =>
+                        checked ? prev.filter((k) => k !== option.key) : [...prev, option.key]
+                      )
+                    }
+                  >
+                    <View style={[styles.osmCheckbox, checked && styles.osmCheckboxChecked]}>
+                      {checked ? <Text style={styles.osmCheckboxMark}>✓</Text> : null}
+                    </View>
+                    <Text style={styles.osmCategoryLabel}>{option.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1331,6 +1402,30 @@ const styles = StyleSheet.create({
   osmButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#fff" },
   osmButtonSecondaryText: { color: "#c0392b" },
   osmStatusText: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 8 },
+  osmSettingsButton: {
+    width: 38,
+    borderRadius: 8,
+    backgroundColor: "#f0f0f0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  osmSettingsHint: { fontFamily: fonts.regular, fontSize: 12, color: "#888", marginBottom: 10 },
+  osmSelectAllRow: { flexDirection: "row", gap: 16, marginBottom: 10 },
+  osmSelectAllText: { fontFamily: fonts.medium, fontSize: 12, color: "#2980b9" },
+  osmCategoryList: { maxHeight: 320 },
+  osmCategoryRow: { flexDirection: "row", alignItems: "center", paddingVertical: 8, gap: 10 },
+  osmCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  osmCheckboxChecked: { backgroundColor: "#2980b9", borderColor: "#2980b9" },
+  osmCheckboxMark: { color: "#fff", fontSize: 13, fontFamily: fonts.medium },
+  osmCategoryLabel: { fontFamily: fonts.regular, fontSize: 13, color: "#333", flex: 1 },
   tapBanner: {
     position: "absolute",
     top: 68,
