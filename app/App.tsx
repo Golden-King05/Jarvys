@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Platform, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import {
   useFonts,
@@ -52,7 +53,11 @@ function AuthedApp() {
           </TouchableOpacity>
         </View>
         <TouchableOpacity onPress={() => setTab("settings")} hitSlop={8}>
-          <Text style={styles.gearIcon}>⚙</Text>
+          <Ionicons
+            name={tab === "settings" ? "settings" : "settings-outline"}
+            size={20}
+            color={tab === "settings" ? "#000" : "#888"}
+          />
         </TouchableOpacity>
       </View>
       <View style={styles.flex}>
@@ -179,5 +184,4 @@ const styles = StyleSheet.create({
   tabGroup: { flexDirection: "row", gap: 24 },
   tab: { fontFamily: fonts.regular, fontSize: 16, color: "#888" },
   tabActive: { fontFamily: fonts.semiBold, fontSize: 16, color: "#000" },
-  gearIcon: { fontSize: 20, color: "#444" },
 });
