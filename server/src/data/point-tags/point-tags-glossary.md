@@ -112,13 +112,41 @@ above.
 `building` is `yes`. A more specific classification than the point's own
 category/subcategory.
 
-**Values:** `barn;house;hotel;store;apartment;office;warehouse;garage;shed;cabin;church;school;hospital;factory;restaurant;library`
+**Values:** `barn;house;hotel;store;apartment;office;warehouse;garage;shed;cabin;church;cathedral;chapel;mosque;synagogue;temple;kingdom_hall;school;hospital;factory;restaurant;library`
 
 This list is a starting set of common types, not exhaustive — add more as
-they come up.
+they come up. `church` through `kingdom_hall` are all places of worship —
+picking the right one is just about which kind of building it physically
+is (a mosque is a mosque regardless of which specific mosque it is); see
+`religion`/`denomination` below for who worships there.
 
 **Auto-fill:** Intended to be filled in automatically from the point's
 category/subcategory when one of these types is recognizable there.
+
+## religion
+
+**What it means:** The religion practiced at a place of worship (or
+otherwise associated with a point) — typically set alongside a
+`building_type` like `church`, `mosque`, `synagogue`, or `temple`, though
+not exclusively tied to those.
+
+**Values:** free text — the religion's full name, written out plainly
+(`Christian`, `Muslim`, `Jewish`, `Buddhist`, `Hindu`), not an abbreviation
+or code.
+
+## denomination
+
+**What it means:** The specific denomination or branch within a religion —
+pairs with `religion` above the same way `brand`/`brand_historic_location`
+pair, one saying the broad category and the other the specific one. A
+Kingdom Hall gets `religion: Christian`, `denomination: Jehovah's
+Witnesses`.
+
+**Values:** free text — the denomination's full name, written out plainly
+the same way `religion` is (`Jehovah's Witnesses`, `Lutheran`, `Sunni`,
+`Reform`), never abbreviated. Two explicit exceptions where either form is
+acceptable: `Catholic` or `Roman Catholic`, and `Orthodox` or `Greek
+Orthodox`.
 
 ## military_installation
 
