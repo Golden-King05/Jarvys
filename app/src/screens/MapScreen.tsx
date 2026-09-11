@@ -157,15 +157,16 @@ function splitLocationSuffix(query: string): { brandQuery: string; locationQuery
 
 // The brand_historic_location values this feature surfaces, and how much
 // each is worth when nothing else (an explicit location match) breaks a
-// tie — a true "first" beats a same-brand point that's merely first *in one
-// country* (country) or *in one city* (municipality, narrower still than
-// country) or split across two locations (the with/without-name pair,
-// tied with plain "first" since both are still global claims).
+// tie — a true "first" beats a same-brand point that's merely first within
+// some narrower scope, narrowest last: country > state > municipality
+// (city), or split across two locations (the with/without-name pair, tied
+// with plain "first" since both are still global claims).
 const HISTORIC_RANK: Record<string, number> = {
-  first: 4,
-  first_with_name: 3,
-  first_without_name: 3,
-  country: 2,
+  first: 5,
+  first_with_name: 4,
+  first_without_name: 4,
+  country: 3,
+  state: 2,
   municipality: 1,
 };
 
@@ -561,6 +562,7 @@ export default function MapScreen({
 
     const startDate = best.point.tags.find((t) => t.key.toLowerCase() === "start_date")?.value;
     const city = best.point.tags.find((t) => t.key.toLowerCase() === "addr:city")?.value;
+    const state = best.point.tags.find((t) => t.key.toLowerCase() === "addr:state")?.value;
     const country = best.point.tags.find((t) => t.key.toLowerCase() === "addr:country")?.value;
     const headline =
       best.historicValue === "first"
@@ -571,7 +573,9 @@ export default function MapScreen({
             ? `This would become ${best.brand}'s first location.`
             : best.historicValue === "country"
               ? `This is the first ${best.brand}${country ? ` in ${country}` : ""}.`
-              : `This is the first ${best.brand}${city ? ` in ${city}` : ""}.`;
+              : best.historicValue === "state"
+                ? `This is the first ${best.brand}${state ? ` in ${state}` : ""}.`
+                : `This is the first ${best.brand}${city ? ` in ${city}` : ""}.`;
     const message = startDate ? `${headline} It was established in ${startDate}.` : headline;
     return { point: best.point, message };
   }

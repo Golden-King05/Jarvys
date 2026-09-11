@@ -200,13 +200,15 @@ Drop the `current: no` and the same tags would instead describe a house
 that also happens to operate as a museum, not one that stopped being a
 house.
 
-**Values:** `museum;shop`
+**Values:** `museum;shop;food`
 
-`shop` is the equivalent case for a building that now operates as a shop
-rather than a museum — same `current: no` rule applies for it to mean
-repurposed rather than "also a shop." Combine with `shop_type`/
-`shop_products` below to say what kind. More values will be added as other
-present-day-use cases come up.
+`shop` and `food` are the equivalent cases for a building that now operates
+as a shop or a food establishment rather than a museum — same `current: no`
+rule applies for either to mean repurposed rather than "also a shop"/"also
+serves food." Combine `shop` with `shop_type`/`shop_products` below, or
+`food` with `food_type`/`food_style`/`food_product` further down, to say
+what kind. More values will be added as other present-day-use cases come
+up.
 
 ## shop_type
 
@@ -238,16 +240,22 @@ every other multi-value tag.
 ## product_or_type_notability
 
 **What it means:** Exists specifically to pair with `shop_historic_location`
-below — says *which* `shop_type`/`shop_products` value a historic claim is
-actually about, for a shop that has more than one of either. A shop selling
-both fudge and ordinary souvenirs that's only historically first for its
-fudge (not for souvenirs in general) gets `product_or_type_notability: fudge`
-— without it, a `shop_historic_location: first` on a multi-product shop
-wouldn't say which product the "first" claim applies to.
+or `food_historic_location` below — says *which* `shop_type`/`shop_products`/
+`food_type`/`food_style`/`food_product` value a historic claim is actually
+about, for a point that has more than one of those set. A shop selling both
+fudge and ordinary souvenirs that's only historically first for its fudge
+(not for souvenirs in general) gets `product_or_type_notability: fudge` —
+without it, a `shop_historic_location: first` on a multi-product shop
+wouldn't say which product the "first" claim applies to. Works the same way
+for food: a diner known specifically for being the first to sell a certain
+burger gets `product_or_type_notability: hamburgers` alongside
+`food_historic_location`, even if its `food_product` list has more than
+just hamburgers on it.
 
-**Values:** free text — one or more `shop_type`/`shop_products` values,
-separated by `;` for more than one (e.g. `fudge` on its own, or
-`fudge;caramel apples` if the claim covers both).
+**Values:** free text — one or more `shop_type`/`shop_products`/
+`food_type`/`food_style`/`food_product` values, separated by `;` for more
+than one (e.g. `fudge` on its own, or `fudge;caramel apples` if the claim
+covers both).
 
 ## shop_historic_location
 
@@ -259,7 +267,7 @@ all. Works identically to `brand_historic_location`, same values and same
 combining-with-`;` rules — see that section for the full explanation of
 each value.
 
-**Values:** `first;first_without_name;first_with_name;municipality;country;registered;unique_location`
+**Values:** `first;first_without_name;first_with_name;municipality;state;country;registered;unique_location`
 
 **Worked example:** "the first place on Mackinac Island that made and sold
 fudge" — `shop_type: fudge` (or `shop_products: fudge`), `addr:city:
@@ -270,6 +278,65 @@ other things, so the "first" claim clearly points at the fudge). "America's
 first grocery store" works the same way one level broader: `shop_type:
 grocery`, `addr:country: United States`, `shop_historic_location: country`,
 `product_or_type_notability: grocery`.
+
+## food_type
+
+**What it means:** What kind of food establishment a place is, for points
+where `amenity` is `food` (or the point's own category otherwise says it's
+a place to eat) — the format/venue, not the cuisine (see `food_style`
+below for that).
+
+**Values:** `pub;bar;restaurant;fast_food;diner`
+
+This list is a starting set of common types, not exhaustive — add more as
+they come up.
+
+## food_style
+
+**What it means:** The cuisine or specific style of food a place serves —
+a separate dimension from `food_type` above (a place can be a `restaurant`
+that's also `mexican`, both set at once via `food_type: restaurant` and
+`food_style: mexican`, not combined into one tag).
+
+**Values:** `mexican;tex_mex;mexican_american;chinese;american_chinese;japanese;sushi;pizza;new_york_style_pizza`
+
+This list is a starting set of common styles, not exhaustive — add more as
+they come up. Several of these are deliberately close variants rather than
+duplicates: `tex_mex` and `mexican_american` are both distinct from plain
+`mexican` (regional American takes on Mexican food, not interchangeable
+with cooking actually rooted in Mexico), the same way `american_chinese`
+is distinct from `chinese`, and `new_york_style_pizza` is a specific
+regional style distinct from `pizza` in general.
+
+## food_product
+
+**What it means:** The specific food items a place sells — narrower and
+more concrete than `food_type`/`food_style`'s broader categories, the same
+relationship `shop_products` has to `shop_type` above. A burger diner's
+`food_type` might be `diner`, its `food_style` unset (not really a
+cuisine), and its `food_product` `hamburgers;fries;milkshakes`.
+
+**Values:** free text — separated by `;` for more than one item, spaces
+and all (`hamburgers;fries`), the same combining convention as every other
+multi-value tag.
+
+## food_historic_location
+
+**What it means:** The `brand_historic_location` pattern, applied to a
+food type/style/product instead of a chain brand — the `shop_historic_
+location` idea, for food specifically. Pairs with
+`product_or_type_notability` above to say what the claim is about, and
+usually with `food_type`/`food_style`/`food_product` to say what the place
+serves at all. Works identically to `brand_historic_location`, same values
+and same combining-with-`;` rules.
+
+**Values:** `first;first_without_name;first_with_name;municipality;state;country;registered;unique_location`
+
+**Worked example:** "the first hamburger place in the country" —
+`food_product: hamburgers`, `addr:country: United States`,
+`food_historic_location: country`, `product_or_type_notability: hamburgers`
+(in case the place serves other food too, so the "first" claim clearly
+points at the hamburgers).
 
 ## brand
 
@@ -318,10 +385,14 @@ document.
   city/town, as opposed to the first one anywhere. Kilwins on Mackinac
   Island gets this: the first Kilwins on the island, though nowhere close
   to the first Kilwins overall.
-- `country` — the first location of this brand within a specific country,
-  the same idea as `municipality` one level broader — the first location
-  in a whole country, as opposed to the first one anywhere *or* just the
-  first one in one city.
+- `state` — the same idea one level broader than `municipality` — the
+  first location of this brand within a specific state/province, as
+  opposed to just one city or the first one anywhere. The first pizza
+  place in Illinois, say, rather than specifically in Chicago
+  (`municipality`) or in the whole country (`country`, below).
+- `country` — broader still: the first location of this brand within a
+  specific country, as opposed to the first one anywhere, in one state, or
+  in one city.
 - `registered` — the location is listed on its country's official historic
   register (the National Register of Historic Places, for the US). Set
   alongside another value here when both apply — a location that's both
