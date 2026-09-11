@@ -50,4 +50,67 @@ happened, isn't "current" by nature).
 
 **Auto-fill:** Set to `no` automatically when the point's category is
 `battle`, since a battle is inherently a past event rather than an ongoing
-one.
+one. See `military_installation` below for how `current` combines with
+`amenity` to say more than just "no" about what happened to a place.
+
+## end_date
+
+**What it means:** The `start_date` counterpart — when the thing ended.
+When a building was demolished, when an organization dissolved, when an
+event (a battle, a siege) concluded. Same idea and same format as
+`start_date`, just marking the other end.
+
+**Values:** `YYYY;DD/MM/YYYY`
+
+## building_type
+
+**What it means:** What kind of building this is, for points where
+`building` is `yes`. A more specific classification than the point's own
+category/subcategory.
+
+**Values:** `barn;house;hotel;store;apartment;office;warehouse;garage;shed;cabin;church;school;hospital;factory;restaurant;library`
+
+This list is a starting set of common types, not exhaustive — add more as
+they come up.
+
+**Auto-fill:** Intended to be filled in automatically from the point's
+category/subcategory when one of these types is recognizable there.
+
+## military_installation
+
+**What it means:** Marks a point as a military site or a building
+belonging to one. Most values name the *type of the main installation
+itself* (a fort, a castle, an airbase). `military_installation_structure`
+is the one special value in the set — it doesn't name a type of
+installation at all, it marks a *secondary building* that's part of one
+without being the main structure: a barracks, a kitchen, a mess hall, a
+garage.
+
+**Values:** `military_installation_structure;fort;castle;airbase;base;camp;garrison;bunker;outpost`
+
+**Combines with `current` and `amenity`:** `current: no` on a military
+installation says it's no longer active, but not what became of the
+physical structure — still standing but repurposed, or gone entirely.
+`amenity: museum` (see below) resolves that: a fort with `current: no` and
+`amenity: museum` is a fort that still stands and is now a museum, not an
+active installation; the same fort with `current: no` and no `amenity` tag
+has simply fallen — no structure, no ongoing use.
+
+**Combines with `building`:** on a `military_installation_structure` point,
+`building` is `yes` when that secondary structure still physically stands,
+or `no` (alongside `current: no`) when it's been torn down — the tag still
+records that a building of that kind (a barracks, say) once stood there,
+even with nothing left of it.
+
+## amenity
+
+**What it means:** What a place currently functions as, when that's
+different from (or in addition to) its historical purpose — right now this
+only covers the museum case: a fort, castle, or similar site that's no
+longer an active installation (`current: no`) but still stands and now
+operates as a museum.
+
+**Values:** `museum`
+
+Only one value so far — more will be added as other present-day-use cases
+come up.
