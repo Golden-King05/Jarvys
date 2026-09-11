@@ -128,6 +128,21 @@ async function findArticlesNear(lat: number, lon: number, limit: number): Promis
     exintro: "1",
     explaintext: "1",
     exchars: "300",
+    // The coordinates module has its own separate result cap — by default
+    // only the first ~10 of the generator's pages (in an internal order
+    // that doesn't match geosearch's distance ordering) actually come back
+    // with a `coordinates` field, regardless of ggslimit. Since every page
+    // without one gets silently dropped below, that meant real nearby
+    // articles randomly went missing from the map depending on their
+    // pageid, while some genuinely distant ones (whichever happened to
+    // land in that first ~10) stayed. "max" removes that second cap so
+    // coordinates come back for every page geosearch already decided to
+    // return. extracts has its own hard per-request ceiling around 20 that
+    // "max" can't lift (a MediaWiki server-side limit, not a client
+    // setting) — articles beyond that still get a real pin, just with
+    // WikipediaClusterModal's "No summary available." fallback instead of
+    // real extract text.
+    colimit: "max",
     format: "json",
   });
   let res: Response;
