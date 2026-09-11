@@ -53,7 +53,16 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
   function definitionFor(key: string): TagDefinition | undefined {
     const normalized = key.trim().toLowerCase();
     if (!normalized) return undefined;
-    return tagDefinitions.find((d) => d.key.toLowerCase() === normalized);
+    const exact = tagDefinitions.find((d) => d.key.toLowerCase() === normalized);
+    if (exact) return exact;
+    // wikipedia:<language code> carries its language in the header itself
+    // (wikipedia:en, wikipedia:fr, ...), so there's no single literal key to
+    // match exactly — fall back to the generic "wikipedia" definition (its
+    // hint about the article-title value) for any language code.
+    if (/^wikipedia:[a-z]{2,3}$/.test(normalized)) {
+      return tagDefinitions.find((d) => d.key.toLowerCase() === "wikipedia");
+    }
+    return undefined;
   }
 
   // Tapping a suggested value completes whatever's currently being typed
@@ -103,7 +112,18 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
   // "addr" itself isn't a real tag (the real ones are addr:street etc.) —
   // surfaced as a suggestion anyway since it's the shortcut into the
   // combined form, not something anyone would otherwise think to type.
-  const allSuggestions = [...new Set([...suggestedKeys, ...tagDefinitions.map((d) => d.key), "addr"])];
+  // "wikipedia" (bare, no language code) is excluded the same way "wikipedia"
+  // is documented as a definition to fall back to, not a literal usable key —
+  // "wikipedia:en" (the common case) is offered directly instead, ready to
+  // use or to hand-edit the language code on.
+  const allSuggestions = [
+    ...new Set([
+      ...suggestedKeys,
+      ...tagDefinitions.filter((d) => d.key.toLowerCase() !== "wikipedia").map((d) => d.key),
+      "addr",
+      "wikipedia:en",
+    ]),
+  ];
   const unusedSuggestions = allSuggestions.filter((k) => !tags.some((t) => t.key === k));
 
   return (

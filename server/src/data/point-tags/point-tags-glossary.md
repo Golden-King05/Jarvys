@@ -20,11 +20,12 @@ one value genuinely applies to the same point at the same time (see
 lists document.
 
 **Free-text tags are the exception to underscores standing in for spaces:**
-`brand`, `name`, `website`, and the `addr:*` tags hold free text exactly as
-written — spaces, apostrophes, and all (`Shake Shack`, `McDonald's`, `123
-Main St`) — rather than a value from a fixed, underscore_joined set. The
-spreadsheet marks these with a parenthetical description instead of a real
-`;`-separated list, e.g. `(free text — the brand's real name...)`.
+`brand`, `name`, `website`, `wikipedia:*`, and the `addr:*` tags hold free
+text exactly as written — spaces, apostrophes, and all (`Shake Shack`,
+`McDonald's`, `123 Main St`) — rather than a value from a fixed,
+underscore_joined set. The spreadsheet marks these with a parenthetical
+description instead of a real `;`-separated list, e.g. `(free text — the
+brand's real name...)`.
 
 **The row right after a tag is sometimes labeled `Format` instead of
 `Values`.** That distinction matters: a `Values` row (without a leading
@@ -40,11 +41,21 @@ building was built, an organization was founded, or a historical event (a
 battle, say) took place. The same tag applies whether it's marking
 construction or an event's date; there's no separate tag per use case.
 
-**Values:** `YYYY;DD/MM/YYYY`
+**Values:** `YYYY;DD/MM/YYYY;YYYYs`
 
-A bare four-digit year (`1886`) when that's all that's known or relevant, or
-a full date in day/month/year order (`14/07/1789`) when the exact day
-matters — European ordering, not month/day/year.
+A bare four-digit year (`1886`) when that's all that's known or relevant, a
+full date in day/month/year order (`14/07/1789`) when the exact day matters
+— European ordering, not month/day/year — or a decade/century with a
+trailing `s` (`1910s`) when only roughly when is known.
+
+**The trailing-`s` form's span depends on how round the year is:** a year
+ending in two zeros spans the whole century (`1900s` means anywhere from
+1900 through 1999), while any other ten's-place year spans just that one
+decade (`1910s` means 1910 through 1919 only, not the wider 1900s century;
+`2010s` likewise means just 2010 through 2019). This mirrors how the phrase
+is actually used in English — "the 1900s" colloquially means the whole
+20th century, while "the 1910s" means one specific decade — rather than
+both meaning "a ten-year span starting at that number."
 
 ## building
 
@@ -88,7 +99,10 @@ When a building was demolished, when an organization dissolved, when an
 event (a battle, a siege) concluded. Same idea and same format as
 `start_date`, just marking the other end.
 
-**Values:** `YYYY;DD/MM/YYYY`
+**Values:** `YYYY;DD/MM/YYYY;YYYYs`
+
+Same format as `start_date`, including the trailing-`s` decade/century rule
+above.
 
 ## building_type
 
@@ -133,7 +147,10 @@ physical structure — still standing but repurposed, or gone entirely.
 `amenity: museum` (see below) resolves that: a fort with `current: no` and
 `amenity: museum` is a fort that still stands and is now a museum, not an
 active installation; the same fort with `current: no` and no `amenity` tag
-has simply fallen — no structure, no ongoing use.
+has simply fallen — no structure, no ongoing use. This `building`/
+`building_type`/`current`/`amenity` combination isn't specific to military
+sites — see `amenity` below for the same idea applied to an ordinary
+building.
 
 **Combines with `building`:** on a point tagged
 `military_installation: military_installation_structure`, `building` is
@@ -165,9 +182,16 @@ point; it isn't set on its own.
 
 **What it means:** What a place currently functions as, when that's
 different from (or in addition to) its historical purpose — right now this
-only covers the museum case: a fort, castle, or similar site that's no
-longer an active installation (`current: no`) but still stands and now
-operates as a museum.
+only covers the museum case: a place that no longer serves its original
+purpose (`current: no`) but still stands and now operates as a museum. Not
+specific to military sites (see `military_installation` above for that
+case) — the same pattern applies to any building whose use changed: a house
+that's no longer lived in and is now a museum gets `building: yes`,
+`building_type: house`, `current: no`, `amenity: museum` — `current: no`
+says it's not a house anymore, `amenity: museum` says what it is now
+instead, and `building_type: house` still records what it used to be.
+Without the `amenity` tag, `current: no` alone would only say "not a house
+anymore," not what became of it.
 
 **Values:** `museum`
 
@@ -241,10 +265,46 @@ document.
 
 **What it means:** A contact phone number for the place.
 
-**Values:** `xxx-xxx-xxxx;+x-xxx-xxx-xxxx`
+**Values:** `xxx-xxx-xxxx;+x-xxx-xxx-xxxx;xxx xxx xxxx;+x xxx xxx xxxx`
 
-Either a plain domestic number (`555-123-4567`) or one with a leading
-country code (`+1-555-123-4567`) — both are accepted formats.
+A plain domestic number or one with a leading country code, separated
+either with dashes (`555-123-4567`, `+1-555-123-4567`) or spaces
+(`555 123 4567`, `+1 555 123 4567`) — all four are equally valid, dashes
+and spaces just being two ordinary ways to punctuate the same number.
+
+## wikidata
+
+**What it means:** Links the point to its corresponding item on
+[Wikidata](https://www.wikidata.org), the structured-data project behind
+Wikipedia — useful for looking the place up precisely regardless of which
+language's Wikipedia (if any) has an article on it.
+
+**Values:** `Q12345`
+
+Always a capital `Q` followed by digits, exactly as Wikidata itself assigns
+it (Wikidata's own item ID, found in a Wikidata item's URL or via its
+"Wikidata item" sidebar link on Wikipedia) — not a real example value, just
+the pattern to follow.
+
+## wikipedia:(language code)
+
+**What it means:** The point's Wikipedia article, when it has one — the
+header itself carries which language's Wikipedia, not the value: `wikipedia:en`
+for English, `wikipedia:fr` for French, `wikipedia:de` for German, and so
+on, matching Wikipedia's own language subdomain codes. Goes naturally
+alongside `wikidata` above when both apply — `wikidata` identifies the
+subject language-independently, `wikipedia:en` (etc.) points at one
+specific language's write-up of it.
+
+**Values:** free text — the exact title of that language's Wikipedia
+article, copied and pasted as written (spaces and all, e.g. `Albert Einstein`),
+not a URL or a slug.
+
+**Entering this:** there's no single fixed header to autofill from since the
+language code varies — typing `wikipedia:en` (the most common case) as a
+tag's header offers the article-title hint on its value; a different
+language works the same way with its own code (`wikipedia:ja`,
+`wikipedia:es`, ...), just typed by hand.
 
 ## addr:street, addr:city, addr:state, addr:postcode, addr:country
 
