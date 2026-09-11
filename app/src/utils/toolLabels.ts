@@ -48,6 +48,20 @@ const TOOL_LABELS: Record<string, ToolInfo> = {
     icon: "💱",
     url: "https://www.frankfurter.dev/",
   },
+  // Not an external source — no "about" page to link to, unlike everything
+  // else here. Shown mainly so it's visible alongside a Wikipedia/web-search
+  // badge on the same reply: seeing both together is what shows a map
+  // lookup was actually tried (and came up empty) rather than skipped.
+  find_saved_point: {
+    label: "Your map",
+    icon: "📍",
+    url: "",
+  },
+  find_points_by_tag: {
+    label: "Your map",
+    icon: "📍",
+    url: "",
+  },
 };
 
 // De-duped, human-friendly source names for the "API used" badge — several
