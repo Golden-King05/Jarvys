@@ -5,6 +5,19 @@ Reference for the `key`/`value` tags a saved [`Point`](../../server/src/db.ts) c
 `point-tags.xlsx` in this folder). Each tag below lists its accepted values —
 a fixed set, or a format pattern — separated by `;` in the spreadsheet.
 
+**A single point's tag can itself hold more than one of those values at
+once** — join them with `;`, no space before or after it (`first;registered`,
+not `first; registered` or `first ; registered`). This is for when more than
+one value genuinely applies to the same point at the same time (see
+`brand_historic_location` below for the clearest example), not the menu of
+*possible* values a tag could take — that's what the spreadsheet's own `;`
+lists document.
+
+**Two tags are the exception to underscores standing in for spaces:**
+`brand` and `name` hold free text exactly as written — spaces, apostrophes,
+and all (`Shake Shack`, `McDonald's`) — rather than a value from a fixed,
+underscore_joined set like every other tag here.
+
 ## start_date
 
 **What it means:** When the thing began — the year (or exact date) a
@@ -145,3 +158,60 @@ operates as a museum.
 
 Only one value so far — more will be added as other present-day-use cases
 come up.
+
+## brand
+
+**What it means:** The name of the chain or business a point belongs to,
+when it belongs to one — a McDonald's, a Shake Shack.
+
+**Values:** free text — the brand's real name, written exactly as the
+brand writes it: spaces, apostrophes, and all (`McDonald's`, `Shake Shack`).
+One of the two exceptions (with `name`) to every other tag's
+underscores-for-spaces convention — there's no fixed value set to enumerate.
+
+**Combines with `brand_historic_location`:** the two are meant to be set
+together — `brand` says which chain, `brand_historic_location` (below)
+says what's notable about *this* location of it.
+
+## name
+
+**What it means:** A point's name, as a tag rather than (or in addition to)
+its own built-in name field. In practice this rarely gets set on its own —
+a point already has a name, so tagging it again is mostly redundant — but
+it exists for when searching or filtering by tag (`find_points_by_tag`) is
+more convenient than by name directly.
+
+**Values:** free text, the same as the point's own name. The other
+exception to the underscores-for-spaces convention, alongside `brand`.
+
+## brand_historic_location
+
+**What it means:** What's notable about *this specific location* of a
+brand — almost always set alongside `brand` (above), which says which
+chain it is. Several of its values can genuinely apply to the same point
+at once — see the note on combining values with `;` at the top of this
+document.
+
+**Values:**
+
+- `first` — the first location of this brand, period. The default,
+  simple case.
+- `first_without_name` / `first_with_name` — a pair used instead of plain
+  `first` when the brand's actual history is split across two locations:
+  an owner opened an earlier business that operated almost identically but
+  didn't yet carry the brand's name (tagged `first_without_name`), then
+  later opened the first location that officially did (tagged
+  `first_with_name`).
+- `municipality` — the first location of this brand within a specific
+  city/town, as opposed to the first one anywhere. Kilwins on Mackinac
+  Island gets this: the first Kilwins on the island, though nowhere close
+  to the first Kilwins overall.
+- `registered` — the location is listed on its country's official historic
+  register (the National Register of Historic Places, for the US). Set
+  alongside another value here when both apply — a location that's both
+  the brand's first *and* on the national registry gets
+  `brand_historic_location: first;registered`.
+- `unique_location` — the location has a distinctive, unusual gimmick or
+  theme worth noting, independent of whether it's historically first at
+  anything — a Hawaiian-themed Chick-fil-A, a location of a chain that
+  normally isn't a buffet but this one is.
