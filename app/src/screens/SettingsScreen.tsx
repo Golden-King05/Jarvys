@@ -1,8 +1,33 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Button, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  Button,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { api, type Provider } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
+
+// A site added to the iOS home screen runs full-screen with no address bar
+// or pull-to-refresh, and Safari can keep serving an old cached page there
+// well after a new version has actually deployed — this gives it a manual
+// way out. A plain reload() can still be served from cache, so this
+// appends a fresh query param first: to the browser that's a different URL
+// it's never cached, forcing a real network fetch of the current
+// index.html (and, since it references content-hashed bundle filenames,
+// whatever JS that new index.html actually points to).
+function refreshApp() {
+  if (Platform.OS !== "web") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("_refresh", Date.now().toString());
+  window.location.replace(url.toString());
+}
 
 export default function SettingsScreen() {
   const { baseUrl, token, logout } = useAuth();
@@ -148,6 +173,19 @@ export default function SettingsScreen() {
           disabled={changingPassword || !currentPassword || !newPassword}
         />
       </View>
+
+      {Platform.OS === "web" ? (
+        <>
+          <Text style={styles.sectionTitle}>Refresh app</Text>
+          <Text style={styles.hint}>
+            If you've added Jarvys to your iPhone's home screen, it can keep showing an old cached version even
+            after an update has shipped — there's no address bar to reload from there. Use this instead.
+          </Text>
+          <View style={styles.spacing}>
+            <Button title="Refresh app" onPress={refreshApp} />
+          </View>
+        </>
+      ) : null}
 
       <View style={styles.spacing}>
         <Button title="Log out" color="#c0392b" onPress={logout} />
