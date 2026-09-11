@@ -81,6 +81,90 @@ function toMapPoint(p: Point): MapPoint {
   };
 }
 
+// --- Historic-brand search matching (see findHistoricBrandMatch below) ---
+// Lowercases, drops apostrophes so "McDonald's"/"Mcdonalds" collapse to the
+// same word, and splits everything else on word boundaries so punctuation
+// (hyphens, commas, "Fort Wayne, Indiana") never blocks a match.
+function normalizeTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function editDistance(a: string, b: string): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      dp[i][j] =
+        a[i - 1] === b[j - 1]
+          ? dp[i - 1][j - 1]
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// A couple of letters swapped or dropped shouldn't sink a match — "Frist"
+// for "First", "Mcdonlads" for "Mcdonalds" — but short words need an exact
+// hit or everything starts looking alike.
+function wordsFuzzyEqual(a: string, b: string): boolean {
+  if (a === b) return true;
+  const shortest = Math.min(a.length, b.length);
+  const threshold = shortest <= 3 ? 0 : shortest <= 6 ? 1 : 2;
+  return editDistance(a, b) <= threshold;
+}
+
+// Every one of `needleTokens` (a brand's words, or a city/state name's
+// words) has to show up somewhere in `haystackTokens` (the search query),
+// fuzzily — but haystackTokens can freely carry extra words (an
+// unmatched "first"/"frist", a trailing location) without breaking it.
+function tokensFuzzyContain(haystackTokens: string[], needleTokens: string[]): boolean {
+  if (needleTokens.length === 0) return false;
+  return needleTokens.every((needle) => haystackTokens.some((hay) => wordsFuzzyEqual(hay, needle)));
+}
+
+// Ranks how well a search matches a brand/name: exact > the old
+// substring-either-way check > a fuzzy, typo-tolerant token match. -1 means
+// no match at all.
+function fuzzyMatchRank(candidate: string, queryTokens: string[]): number {
+  const candidateTokens = normalizeTokens(candidate);
+  if (candidateTokens.length === 0) return -1;
+  const candidateBlob = candidateTokens.join(" ");
+  const queryBlob = queryTokens.join(" ");
+  if (queryBlob === candidateBlob) return 3;
+  if (queryBlob.includes(candidateBlob) || candidateBlob.includes(queryBlob)) return 2;
+  if (tokensFuzzyContain(queryTokens, candidateTokens)) return 1;
+  return -1;
+}
+
+// Splits a search like "first mcdonald's in fort wayne, indiana" into the
+// brand part and a trailing place name, on the last standalone "in" — so
+// the brand match and the location match run independently instead of the
+// location text having to appear verbatim next to the brand.
+function splitLocationSuffix(query: string): { brandQuery: string; locationQuery: string | null } {
+  const match = query.match(/^(.*)\bin\b\s+(.+)$/i);
+  if (!match || !match[1].trim() || !match[2].trim()) return { brandQuery: query, locationQuery: null };
+  return { brandQuery: match[1].trim(), locationQuery: match[2].trim() };
+}
+
+// The brand_historic_location values this feature surfaces, and how much
+// each is worth when nothing else (an explicit location match) breaks a
+// tie — a true "first" beats a same-brand point that's merely first *in one
+// city* (municipality) or split across two locations (the with/without-name
+// pair), which in turn beat nothing.
+const HISTORIC_RANK: Record<string, number> = {
+  first: 3,
+  first_with_name: 2,
+  first_without_name: 2,
+  municipality: 1,
+};
+
 export default function MapScreen({
   mapData,
   onVerifyMap,
@@ -395,48 +479,66 @@ export default function MapScreen({
   }
 
   // A saved point tagged brand_historic_location (first / first_without_name
-  // / first_with_name) is a landmark in its own right — searching the brand
-  // name should surface it directly instead of just geocoding an address, no
-  // AI call needed since it's a straight lookup over already-loaded points.
-  // Matches on the brand tag when present (the chain's real name), falling
-  // back to the point's own name otherwise; an exact match beats a
-  // substring match so e.g. "McDonald's" doesn't get out-ranked by some
-  // unrelated point that merely mentions it.
+  // / first_with_name / municipality) is a landmark in its own right —
+  // searching the brand name should surface it directly instead of just
+  // geocoding an address, no AI call needed since it's a straight lookup
+  // over already-loaded points. Matches on the brand tag when present (the
+  // chain's real name), falling back to the point's own name otherwise, and
+  // tolerates typos/misspellings in either the brand or a trailing place
+  // name ("first mcdonalds in fort wayne indiana") via fuzzyMatchRank.
   function findHistoricBrandMatch(query: string): { point: Point; message: string } | null {
-    const q = query.trim().toLowerCase();
-    if (!q) return null;
-    let best: Point | null = null;
-    let bestRank = -1;
+    const { brandQuery, locationQuery } = splitLocationSuffix(query.trim());
+    const queryTokens = normalizeTokens(brandQuery);
+    if (queryTokens.length === 0) return null;
+    const locationTokens = locationQuery ? normalizeTokens(locationQuery) : null;
+
+    let best: { point: Point; brand: string; historicValue: string; score: number } | null = null;
     for (const p of points) {
       const historic = p.tags.find((t) => t.key.toLowerCase() === "brand_historic_location")?.value;
       if (!historic) continue;
       const values = historic.split(";").map((v) => v.trim().toLowerCase());
-      if (!values.includes("first") && !values.includes("first_without_name") && !values.includes("first_with_name")) {
-        continue;
+      const historicValue = Object.keys(HISTORIC_RANK).find((v) => values.includes(v));
+      if (!historicValue) continue;
+
+      const brand = p.tags.find((t) => t.key.toLowerCase() === "brand")?.value ?? p.name;
+      const brandRank = fuzzyMatchRank(brand, queryTokens);
+      if (brandRank < 0) continue;
+
+      // A location was named ("...in Fort Wayne, Indiana") — this point has
+      // to actually be there, checked against its own addr:city/addr:state,
+      // or it's not a real match no matter how well the brand matched.
+      let locationBonus = 0;
+      if (locationTokens) {
+        const city = p.tags.find((t) => t.key.toLowerCase() === "addr:city")?.value;
+        const state = p.tags.find((t) => t.key.toLowerCase() === "addr:state")?.value;
+        const cityMatched = !!city && tokensFuzzyContain(locationTokens, normalizeTokens(city));
+        const stateMatched = !!state && tokensFuzzyContain(locationTokens, normalizeTokens(state));
+        if (!cityMatched && !stateMatched) continue;
+        // A state named alongside a matching city is what disambiguates two
+        // same-named cities in different states — worth far more than the
+        // brand/tag tiers below so it always wins the tie-break.
+        locationBonus = (cityMatched ? 100 : 0) + (stateMatched ? 100 : 0);
       }
-      const brand = (p.tags.find((t) => t.key.toLowerCase() === "brand")?.value ?? p.name).toLowerCase();
-      const rank = brand === q ? 2 : brand.includes(q) || q.includes(brand) ? 1 : -1;
-      if (rank > bestRank) {
-        bestRank = rank;
-        best = p;
+
+      const score = locationBonus + HISTORIC_RANK[historicValue] * 10 + brandRank;
+      if (!best || score > best.score) {
+        best = { point: p, brand, historicValue, score };
       }
     }
-    if (!best || bestRank < 0) return null;
+    if (!best) return null;
 
-    const brand = best.tags.find((t) => t.key.toLowerCase() === "brand")?.value ?? best.name;
-    const historicValues = best.tags
-      .find((t) => t.key.toLowerCase() === "brand_historic_location")!
-      .value.split(";")
-      .map((v) => v.trim().toLowerCase());
-    const startDate = best.tags.find((t) => t.key.toLowerCase() === "start_date")?.value;
-
-    const headline = historicValues.includes("first")
-      ? `This is the first ${brand}.`
-      : historicValues.includes("first_with_name")
-        ? `The first official ${brand} is here.`
-        : `This would become ${brand}'s first location.`;
+    const startDate = best.point.tags.find((t) => t.key.toLowerCase() === "start_date")?.value;
+    const city = best.point.tags.find((t) => t.key.toLowerCase() === "addr:city")?.value;
+    const headline =
+      best.historicValue === "first"
+        ? `This is the first ${best.brand}.`
+        : best.historicValue === "first_with_name"
+          ? `The first official ${best.brand} is here.`
+          : best.historicValue === "first_without_name"
+            ? `This would become ${best.brand}'s first location.`
+            : `This is the first ${best.brand}${city ? ` in ${city}` : ""}.`;
     const message = startDate ? `${headline} It was established in ${startDate}.` : headline;
-    return { point: best, message };
+    return { point: best.point, message };
   }
 
   async function handleSearch() {
