@@ -56,13 +56,16 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
     return tagDefinitions.find((d) => d.key.toLowerCase() === normalized);
   }
 
-  function toggleEnumValue(i: number, option: string) {
-    const current = tags[i].value
-      .split(";")
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const next = current.includes(option) ? current.filter((v) => v !== option) : [...current, option];
-    updateTag(i, { value: next.join(";") });
+  // Tapping a suggested value completes whatever's currently being typed
+  // (the text after the last ";") into that full value, the same way
+  // tapping a header suggestion fills the header — a shortcut on top of
+  // free typing, not the only way to fill the field. Multiple values still
+  // combine with ";": finish one, keep typing after it, pick the next.
+  function completeEnumValue(i: number, option: string) {
+    const parts = tags[i].value.split(";").map((v) => v.trim());
+    parts[parts.length - 1] = option;
+    const deduped = [...new Set(parts.filter(Boolean))];
+    updateTag(i, { value: deduped.join(";") });
   }
 
   function openAddrForm(i: number) {
@@ -136,31 +139,27 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
               <TouchableOpacity style={styles.addrButton} onPress={() => openAddrForm(i)}>
                 <Text style={styles.addrButtonText}>📍 Fill in address…</Text>
               </TouchableOpacity>
-            ) : definition?.kind === "enum" ? (
-              <View style={styles.enumChipsRow}>
-                {definition.values!.map((option) => {
-                  const selected = tag.value
-                    .split(";")
-                    .map((v) => v.trim())
-                    .includes(option);
-                  return (
-                    <TouchableOpacity
-                      key={option}
-                      style={[styles.enumChip, selected && styles.enumChipSelected]}
-                      onPress={() => toggleEnumValue(i, option)}
-                    >
-                      <Text style={[styles.enumChipText, selected && styles.enumChipTextSelected]}>{option}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
             ) : (
-              <TextInput
-                style={styles.tagInput}
-                placeholder={definition?.hint ?? "Value (e.g. Victorian)"}
-                value={tag.value}
-                onChangeText={(v) => updateTag(i, { value: v })}
-              />
+              <>
+                <TextInput
+                  style={styles.tagInput}
+                  placeholder={definition?.hint ?? "Value (e.g. Victorian)"}
+                  value={tag.value}
+                  onChangeText={(v) => updateTag(i, { value: v })}
+                />
+                {definition?.kind === "enum" ? (
+                  <View style={styles.enumChipsRow}>
+                    {definition.values!.filter((option) => {
+                      const typed = tag.value.split(";").pop()!.trim().toLowerCase();
+                      return !typed || (option.toLowerCase().includes(typed) && option.toLowerCase() !== typed);
+                    }).map((option) => (
+                      <TouchableOpacity key={option} style={styles.enumChip} onPress={() => completeEnumValue(i, option)}>
+                        <Text style={styles.enumChipText}>{option}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </>
             )}
 
             {addrFormRow === i ? (
