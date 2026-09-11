@@ -33,7 +33,14 @@ import {
 } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
-import { clusterOsmElements, inferOsmCategory, osmElementKey, osmElementName, type OsmCluster } from "../utils/osm";
+import {
+  clusterOsmElements,
+  inferOsmCategory,
+  osmElementKey,
+  osmElementName,
+  suggestOsmIcon,
+  type OsmCluster,
+} from "../utils/osm";
 import { suggestIcon } from "../utils/suggestIcon";
 
 interface MapScreenProps {
@@ -332,7 +339,7 @@ export default function MapScreen({
       name: osmElementName(element),
       category,
       subcategory,
-      icon: suggestIcon(category, subcategory) ?? "📍",
+      icon: suggestOsmIcon(category, subcategory) ?? "📍",
       otherTags,
       selectedTagKeys: [],
     });

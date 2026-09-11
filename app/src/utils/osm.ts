@@ -1,4 +1,5 @@
 import type { OsmElement } from "../api";
+import { suggestIcon } from "./suggestIcon";
 
 export interface OsmCluster {
   lat: number;
@@ -63,6 +64,7 @@ const CATEGORY_KEYS = [
   "railway",
   "waterway",
   "building",
+  "highway",
 ];
 
 // Best-guess category/subcategory from an element's raw tags, so the import
@@ -77,4 +79,16 @@ export function inferOsmCategory(tags: Record<string, string>): { category: stri
     }
   }
   return { category: "", subcategory: "" };
+}
+
+// suggestIcon's keyword list is shared with manually-typed categories
+// elsewhere in the app and has no entry for a plain road — "residential",
+// "primary", "trunk", "living street" etc. don't read as anything to match
+// against, and adding them there risks matching unrelated hand-typed
+// categories that happen to share a word. A specific highway value that
+// already means something else (bus_stop, traffic_signals) still matches
+// suggestIcon's own keywords first; this is only the fallback for a plain
+// stretch of road, common enough now that ways are included to warrant it.
+export function suggestOsmIcon(category: string, subcategory: string): string | null {
+  return suggestIcon(category, subcategory) ?? (category === "highway" ? "🛣️" : null);
 }

@@ -1,10 +1,9 @@
 import React, { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from "../api";
 import { useAuth } from "../AuthContext";
-import { inferOsmCategory, osmElementKey, type OsmCluster } from "../utils/osm";
+import { inferOsmCategory, osmElementKey, suggestOsmIcon, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
 import { statusColor } from "../utils/regionStatus";
-import { suggestIcon } from "../utils/suggestIcon";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
 
@@ -160,7 +159,7 @@ function emojiIconWithBadge(L: Leaflet, icon: string, count: number) {
 function iconForOsmCluster(cluster: OsmCluster): string {
   if (cluster.elements.length === 1) {
     const { category, subcategory } = inferOsmCategory(cluster.elements[0].tags);
-    return suggestIcon(category, subcategory) ?? "📍";
+    return suggestOsmIcon(category, subcategory) ?? "📍";
   }
   return "📍";
 }

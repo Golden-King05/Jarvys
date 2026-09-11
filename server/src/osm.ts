@@ -64,31 +64,6 @@ const MAX_RESULTS = 300;
 // the connection outright.
 const OVERPASS_TIMEOUT_MS = 12000;
 
-// Plenty of named ways are just roads (a residential street, a state
-// highway) — technically taggable but not something anyone means by "a
-// place I could add to my map". Dropped unless they also carry some other
-// tag that makes them more than a road.
-const NON_ROAD_TAG_KEYS = [
-  "amenity",
-  "shop",
-  "tourism",
-  "historic",
-  "leisure",
-  "natural",
-  "craft",
-  "office",
-  "man_made",
-  "building",
-  "landuse",
-  "waterway",
-  "railway",
-];
-
-function isPlainRoad(tags: Record<string, string>): boolean {
-  if (!tags.highway) return false;
-  return !NON_ROAD_TAG_KEYS.some((key) => key in tags);
-}
-
 // Fetches every named node/way/relation in the given area — the raw
 // material for the map's "OpenStreetMap" layer. Ways and relations come
 // back with Overpass's own computed centroid (the `center` output mode)
@@ -132,7 +107,6 @@ export async function findOsmElementsInArea(
     const lat = e.lat ?? e.center?.lat;
     const lon = e.lon ?? e.center?.lon;
     if (lat == null || lon == null || !e.tags || !e.tags.name) return [];
-    if (isPlainRoad(e.tags)) return [];
     return [{ osmType: e.type, osmId: e.id, lat, lon, tags: e.tags }];
   });
 
