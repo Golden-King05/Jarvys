@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { api, isSavedPoint, type MapPoint, type Point, type PointTag } from "../api";
+import { api, isSavedPoint, type MapPoint, type Point, type PointTag, type TagDefinition } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { suggestIcon } from "../utils/suggestIcon";
@@ -59,6 +59,12 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tagKeys, setTagKeys] = useState<string[]>([]);
+  const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
+  // Tags start collapsed each time a pin is opened — a point can carry a
+  // lot of them now (a full address alone is five) and most of the time
+  // you just want the name/blurb at a glance. Same collapsed-by-default,
+  // tap-to-expand pattern as the chat's "API used" marker.
+  const [tagsExpanded, setTagsExpanded] = useState(false);
   // Locked as soon as someone edits the icon field by hand, so category
   // suggestions stop overwriting a deliberate choice — reset on each edit.
   const iconLocked = useRef(false);
@@ -77,6 +83,7 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
   useEffect(() => {
     setEditing(false);
     setError(null);
+    setTagsExpanded(false);
   }, [point ? pointKey(point) : null]);
 
   if (!point) return null;
@@ -110,6 +117,12 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
         .catch(() => {
           // No suggestions if this fails — the tag editor still works, just
           // without existing headers to pick from.
+        });
+      api
+        .getTagDefinitions(baseUrl, token)
+        .then(({ definitions }) => setTagDefinitions(definitions))
+        .catch(() => {
+          // No autofill if this fails — the tag editor still works.
         });
     }
   }
@@ -203,6 +216,7 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
                 tags={draft.tags}
                 onChange={(tags) => setDraft((d) => ({ ...d, tags }))}
                 suggestedKeys={tagKeys}
+                tagDefinitions={tagDefinitions}
               />
               {error ? <Text style={styles.error}>{error}</Text> : null}
               <View style={styles.formButtons}>
@@ -255,14 +269,23 @@ export default function PointDetailModal({ point, onClose, onDelete, onSave }: P
               ) : null}
 
               {tags.length > 0 ? (
-                <View style={styles.tagsBox}>
-                  {tags.map((t, i) => (
-                    <View key={i} style={styles.tagChip}>
-                      <Text style={styles.tagChipText}>
-                        {t.key}: {t.value}
-                      </Text>
+                <View>
+                  <TouchableOpacity onPress={() => setTagsExpanded((e) => !e)}>
+                    <Text style={styles.tagsToggle}>
+                      {tagsExpanded ? "Hide tags" : `Show tags (${tags.length})`}
+                    </Text>
+                  </TouchableOpacity>
+                  {tagsExpanded ? (
+                    <View style={styles.tagsBox}>
+                      {tags.map((t, i) => (
+                        <View key={i} style={styles.tagChip}>
+                          <Text style={styles.tagChipText}>
+                            {t.key}: {t.value}
+                          </Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
+                  ) : null}
                 </View>
               ) : null}
 
@@ -302,7 +325,8 @@ const styles = StyleSheet.create({
   blurb: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 18, color: "#444" },
   urlsBox: { marginTop: 12, gap: 4 },
   url: { fontFamily: fonts.regular, fontSize: 12, color: "#2980b9" },
-  tagsBox: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 12 },
+  tagsToggle: { fontFamily: fonts.medium, fontSize: 11, color: "#999", marginTop: 12 },
+  tagsBox: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
   tagChip: { backgroundColor: "#f0f0f0", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 },
   tagChipText: { fontFamily: fonts.medium, fontSize: 11, color: "#444" },
   actionsRow: { flexDirection: "row", gap: 20, marginTop: 16 },

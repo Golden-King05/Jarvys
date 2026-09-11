@@ -4,6 +4,7 @@ import { createMapPoint, deleteMapPoint, getDistinctTagKeys, getMapPoints, updat
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { importPointFromUrl } from "../pointImport.js";
+import { getPointTagDefinitions } from "../pointTags.js";
 
 export const pointsRouter = Router();
 pointsRouter.use(requireAuth);
@@ -61,6 +62,19 @@ pointsRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const keys = await getDistinctTagKeys(req.userId!);
     res.json({ keys });
+  })
+);
+
+// The app's own documented tag vocabulary (start_date, building,
+// brand_historic_location, ...) — powers the tag editor's autofill: a known
+// header offers its real values (or a format hint) instead of a blank
+// free-text box. Static reference data, not account-specific, but kept
+// behind auth like every other /points route for simplicity.
+pointsRouter.get(
+  "/tag-definitions",
+  asyncHandler(async (_req: AuthedRequest, res) => {
+    const definitions = await getPointTagDefinitions();
+    res.json({ definitions });
   })
 );
 

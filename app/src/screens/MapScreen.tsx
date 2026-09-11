@@ -29,6 +29,7 @@ import {
   type Point,
   type PointTag,
   type RegionMapData,
+  type TagDefinition,
   type WikipediaCluster,
 } from "../api";
 import { useAuth } from "../AuthContext";
@@ -167,6 +168,7 @@ export default function MapScreen({
   const [submitting, setSubmitting] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [tagKeys, setTagKeys] = useState<string[]>([]);
+  const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
   // Once someone types their own icon, stop overwriting it with suggestions
   // based on category/subcategory — reset whenever a form is reopened.
   const urlIconLocked = useRef(false);
@@ -249,6 +251,18 @@ export default function MapScreen({
   useEffect(() => {
     loadTagKeys();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl, token]);
+
+  // Static reference data (the documented tag vocabulary) — loaded once
+  // rather than refreshed after every save like the account's own tagKeys.
+  useEffect(() => {
+    if (!token) return;
+    api
+      .getTagDefinitions(baseUrl, token)
+      .then(({ definitions }) => setTagDefinitions(definitions))
+      .catch(() => {
+        // No autofill if this fails — the tag editor still works.
+      });
   }, [baseUrl, token]);
 
   useEffect(() => {
@@ -933,6 +947,7 @@ export default function MapScreen({
               tags={urlDraft.tags}
               onChange={(tags) => setUrlDraft((d) => ({ ...d, tags }))}
               suggestedKeys={tagKeys}
+              tagDefinitions={tagDefinitions}
             />
             {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
             <View style={styles.formButtons}>
@@ -994,6 +1009,7 @@ export default function MapScreen({
               tags={detailsDraft.tags}
               onChange={(tags) => setDetailsDraft((d) => ({ ...d, tags }))}
               suggestedKeys={tagKeys}
+              tagDefinitions={tagDefinitions}
             />
             {addError ? <Text style={styles.errorText}>{addError}</Text> : null}
             <View style={styles.formButtons}>

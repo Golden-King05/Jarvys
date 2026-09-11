@@ -19,10 +19,19 @@ one value genuinely applies to the same point at the same time (see
 *possible* values a tag could take — that's what the spreadsheet's own `;`
 lists document.
 
-**Two tags are the exception to underscores standing in for spaces:**
-`brand` and `name` hold free text exactly as written — spaces, apostrophes,
-and all (`Shake Shack`, `McDonald's`) — rather than a value from a fixed,
-underscore_joined set like every other tag here.
+**Free-text tags are the exception to underscores standing in for spaces:**
+`brand`, `name`, `website`, and the `addr:*` tags hold free text exactly as
+written — spaces, apostrophes, and all (`Shake Shack`, `McDonald's`, `123
+Main St`) — rather than a value from a fixed, underscore_joined set. The
+spreadsheet marks these with a parenthetical description instead of a real
+`;`-separated list, e.g. `(free text — the brand's real name...)`.
+
+**The row right after a tag is sometimes labeled `Format` instead of
+`Values`.** That distinction matters: a `Values` row (without a leading
+parenthesis) is a closed set — pick one of those exact strings. A `Format`
+row instead shows example patterns for what to type — `start_date`'s
+`YYYY;DD/MM/YYYY` means "a bare year, or a day/month/year date", not that
+the literal text `YYYY` is a valid value.
 
 ## start_date
 
@@ -221,3 +230,34 @@ document.
   theme worth noting, independent of whether it's historically first at
   anything — a Hawaiian-themed Chick-fil-A, a location of a chain that
   normally isn't a buffet but this one is.
+
+## website
+
+**What it means:** The place's own website.
+
+**Values:** free text — a URL, written as-is.
+
+## phone
+
+**What it means:** A contact phone number for the place.
+
+**Values:** `xxx-xxx-xxxx;+x-xxx-xxx-xxxx`
+
+Either a plain domestic number (`555-123-4567`) or one with a leading
+country code (`+1-555-123-4567`) — both are accepted formats.
+
+## addr:street, addr:city, addr:state, addr:postcode, addr:country
+
+**What they mean:** A place's mailing address, broken into the same
+per-field tags OpenStreetMap uses — one tag per part rather than a single
+"address" blob, so e.g. searching or filtering by city alone stays
+possible. Each is free text: `addr:street` a street address
+(`123 Main St`), `addr:city` a city or town, `addr:state` a state,
+province, or region, `addr:postcode` a ZIP or postal code, and
+`addr:country` a country name.
+
+**Entering these:** typing `addr` itself as a tag's header (rather than
+one specific `addr:*` name) opens a combined little form for all five
+fields at once instead of adding them one tag at a time — leave any of
+them blank to skip that one. Typing a specific header like `addr:street`
+directly still works too, for editing just that one field on its own.

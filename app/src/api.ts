@@ -34,6 +34,19 @@ export interface PointTag {
   value: string;
 }
 
+export type TagValueKind = "enum" | "format" | "freeText";
+
+// The app's own documented tag vocabulary (start_date, building,
+// brand_historic_location, ...) — powers the tag editor's autofill. "enum"
+// is a closed set to pick from (values); "format"/"freeText" are free-typed
+// with a hint shown as a placeholder.
+export interface TagDefinition {
+  key: string;
+  kind: TagValueKind;
+  values?: string[];
+  hint?: string;
+}
+
 export interface MapPoint {
   // Only present when this point mirrors a saved Point (from the /points
   // list) — lets the map know it's editable/draggable, since an ephemeral
@@ -307,6 +320,12 @@ export const api = {
   // "pick an existing header" suggestions in the tag editor so headers
   // naturally stay consistent instead of drifting into near-duplicates.
   getTagKeys: (baseUrl: string, token: string) => request<{ keys: string[] }>(baseUrl, "/points/tags", { token }),
+
+  // The app's own documented tag vocabulary — powers the tag editor's
+  // autofill (a known header offers its real values or a format hint
+  // instead of a blank free-text box).
+  getTagDefinitions: (baseUrl: string, token: string) =>
+    request<{ definitions: TagDefinition[] }>(baseUrl, "/points/tag-definitions", { token }),
 
   // Live aircraft within a map viewport, pre-formatted as ready-to-render
   // points — backs the "Live flights" layer.
