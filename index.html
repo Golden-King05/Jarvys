@@ -3,7 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <!--
+      maximum-scale=1, user-scalable=no on top of Expo's default viewport
+      tag: without them, iOS Safari's own double-tap-to-zoom and pinch-zoom
+      still fire on the whole page (not just Leaflet's own zoom), which is
+      what was causing the map to "zoom in and get stuck" — a double-tap
+      while filling in a pin's details zoomed the page itself, not the map,
+      and that page-level zoom persisted after leaving the form. The map's
+      own pinch/scroll zoom (Leaflet) is unaffected by this — it's handled
+      entirely inside the map canvas, not by the browser's page zoom.
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no" />
     <title>Jarvys</title>
     <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
     <style id="expo-reset">
