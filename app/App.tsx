@@ -12,6 +12,7 @@ import {
 import { AuthProvider, useAuth } from "./src/AuthContext";
 import { fonts } from "./src/theme";
 import type { LayerCommand, MapData } from "./src/api";
+import type { BaseLayerKind } from "./src/utils/baseLayer";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import MapScreen from "./src/screens/MapScreen";
@@ -34,6 +35,8 @@ function AuthedApp() {
   const [showOsm, setShowOsm] = useState(false);
   const [showLidar, setShowLidar] = useState(false);
   const [lidarOpacity, setLidarOpacity] = useState(0.7);
+  const [lidarContrast, setLidarContrast] = useState(100);
+  const [baseLayer, setBaseLayer] = useState<BaseLayerKind>("map");
 
   function handleLayerCommand(cmd: LayerCommand) {
     if (cmd.layer === "radar") setShowRadar(cmd.enabled);
@@ -89,6 +92,10 @@ function AuthedApp() {
             setShowLidar={setShowLidar}
             lidarOpacity={lidarOpacity}
             setLidarOpacity={setLidarOpacity}
+            lidarContrast={lidarContrast}
+            setLidarContrast={setLidarContrast}
+            baseLayer={baseLayer}
+            setBaseLayer={setBaseLayer}
           />
         ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}

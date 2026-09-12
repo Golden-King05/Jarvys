@@ -7,6 +7,7 @@ import { outerRings } from "../utils/geojson";
 import { inferOsmCategory, osmElementKey, suggestOsmIcon, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
+import type { BaseLayerKind } from "../utils/baseLayer";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
@@ -47,6 +48,15 @@ interface MapCanvasProps {
   showLidar?: boolean;
   // 0-1, how opaque that overlay is — defaults to 0.7.
   lidarOpacity?: number;
+  // Accepted for prop-shape parity with the web canvas (MapScreen passes
+  // the same props to whichever platform file the bundler resolves) but
+  // unused here — react-native-maps' UrlTile has no filter/contrast hook.
+  lidarContrast?: number;
+  // "map" (the native map's own standard style, the default) or
+  // "satellite" — react-native-maps' own mapType, backed by Apple/Google's
+  // imagery directly rather than a custom tile overlay like the web
+  // canvas's Esri layer.
+  baseLayer?: BaseLayerKind;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -152,6 +162,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     showTimezoneBands,
     showLidar,
     lidarOpacity = 0.7,
+    baseLayer = "map",
     showPins = true,
     showFlights,
     showWikipedia,
@@ -341,6 +352,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       ref={mapRef}
       style={StyleSheet.absoluteFill}
       provider={PROVIDER_DEFAULT}
+      mapType={baseLayer === "satellite" ? "satellite" : "standard"}
       initialRegion={
         initialRegion
           ? { ...initialRegion, latitudeDelta: 0.1, longitudeDelta: 0.1 }

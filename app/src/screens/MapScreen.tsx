@@ -46,6 +46,7 @@ import {
   type OsmCluster,
 } from "../utils/osm";
 import { suggestIcon } from "../utils/suggestIcon";
+import type { BaseLayerKind } from "../utils/baseLayer";
 
 interface MapScreenProps {
   mapData: MapData | null;
@@ -69,6 +70,10 @@ interface MapScreenProps {
   setShowLidar: (v: boolean) => void;
   lidarOpacity: number;
   setLidarOpacity: (v: number) => void;
+  lidarContrast: number;
+  setLidarContrast: (v: number) => void;
+  baseLayer: BaseLayerKind;
+  setBaseLayer: (v: BaseLayerKind) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "osm-import" | "awaiting-tap";
@@ -194,6 +199,10 @@ export default function MapScreen({
   setShowLidar,
   lidarOpacity,
   setLidarOpacity,
+  lidarContrast,
+  setLidarContrast,
+  baseLayer,
+  setBaseLayer,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const mapCanvasRef = useRef<MapCanvasHandle>(null);
@@ -872,6 +881,8 @@ export default function MapScreen({
           showTimezoneBands={showTimezoneBands}
           showLidar={showLidar}
           lidarOpacity={lidarOpacity}
+          lidarContrast={lidarContrast}
+          baseLayer={baseLayer}
           showPins={showPins}
           showFlights={showFlights}
           showWikipedia={showWikipedia}
@@ -1010,6 +1021,27 @@ export default function MapScreen({
               </TouchableOpacity>
             </View>
 
+            <View style={styles.baseLayerRow}>
+              <TouchableOpacity
+                style={[styles.baseLayerButton, baseLayer === "map" && styles.baseLayerButtonActive]}
+                onPress={() => setBaseLayer("map")}
+              >
+                <Text style={[styles.baseLayerButtonText, baseLayer === "map" && styles.baseLayerButtonTextActive]}>
+                  Map
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.baseLayerButton, baseLayer === "satellite" && styles.baseLayerButtonActive]}
+                onPress={() => setBaseLayer("satellite")}
+              >
+                <Text
+                  style={[styles.baseLayerButtonText, baseLayer === "satellite" && styles.baseLayerButtonTextActive]}
+                >
+                  Satellite
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.layerRow}>
               <View style={styles.layerLabelBox}>
                 <Text style={styles.layerLabel}>Saved pins</Text>
@@ -1066,7 +1098,7 @@ export default function MapScreen({
               <Switch value={showLidar} onValueChange={setShowLidar} />
             </View>
             {showLidar ? (
-              <View style={styles.lidarOpacityRow}>
+              <View style={Platform.OS === "web" ? styles.lidarOpacityRowNoBorder : styles.lidarOpacityRow}>
                 <Text style={styles.layerHint}>Opacity</Text>
                 <Slider
                   style={styles.lidarOpacitySlider}
@@ -1074,6 +1106,19 @@ export default function MapScreen({
                   maximumValue={1}
                   value={lidarOpacity}
                   onValueChange={setLidarOpacity}
+                  minimumTrackTintColor="#2980b9"
+                />
+              </View>
+            ) : null}
+            {showLidar && Platform.OS === "web" ? (
+              <View style={styles.lidarOpacityRow}>
+                <Text style={styles.layerHint}>Contrast</Text>
+                <Slider
+                  style={styles.lidarOpacitySlider}
+                  minimumValue={50}
+                  maximumValue={200}
+                  value={lidarContrast}
+                  onValueChange={setLidarContrast}
                   minimumTrackTintColor="#2980b9"
                 />
               </View>
@@ -1565,6 +1610,17 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   cardTitle: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222", marginBottom: 14 },
   closeIcon: { fontFamily: fonts.medium, fontSize: 16, color: "#888" },
+  baseLayerRow: {
+    flexDirection: "row",
+    backgroundColor: "#f0f0f0",
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 14,
+  },
+  baseLayerButton: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: "center" },
+  baseLayerButtonActive: { backgroundColor: "#fff", elevation: 1 },
+  baseLayerButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#888" },
+  baseLayerButtonTextActive: { color: "#222" },
   layerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1590,6 +1646,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
+  lidarOpacityRowNoBorder: { flexDirection: "row", alignItems: "center", gap: 10, paddingBottom: 6 },
   lidarOpacitySlider: { flex: 1, height: 32 },
   choiceButton: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#eee" },
   choiceText: { fontFamily: fonts.medium, fontSize: 14, color: "#2980b9" },

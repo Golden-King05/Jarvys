@@ -4,6 +4,13 @@ import { useAuth } from "../AuthContext";
 import { inferOsmCategory, osmElementKey, suggestOsmIcon, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
 import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
+import {
+  OSM_ATTRIBUTION,
+  OSM_TILE_URL,
+  SATELLITE_ATTRIBUTION,
+  SATELLITE_TILE_URL,
+  type BaseLayerKind,
+} from "../utils/baseLayer";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
@@ -79,6 +86,13 @@ interface MapCanvasProps {
   // existing layer via setOpacity rather than recreating it, so dragging
   // the Layers panel's slider doesn't reload every tile on every change.
   lidarOpacity?: number;
+  // 50-200, a CSS contrast() percentage applied to the lidar overlay's own
+  // tile container — 100 is unchanged. Web only: there's no equivalent
+  // filter hook on react-native-maps' UrlTile, so native ignores this.
+  lidarContrast?: number;
+  // "map" (OSM, the default) or "satellite" (Esri World Imagery) — which
+  // base layer to show underneath everything else.
+  baseLayer?: BaseLayerKind;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -200,6 +214,8 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     showTimezoneBands,
     showLidar,
     lidarOpacity = 0.7,
+    lidarContrast = 100,
+    baseLayer = "map",
     showPins = true,
     showFlights,
     showWikipedia,
@@ -221,6 +237,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
   const layerGroup = useRef<Leaflet>(null);
   const radarLayerRef = useRef<Leaflet>(null);
   const lidarLayerRef = useRef<Leaflet>(null);
+  const baseTileLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
   const flightsLayerRef = useRef<Leaflet>(null);
   const wikiLayerRef = useRef<Leaflet>(null);
@@ -263,15 +280,19 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       if (cancelled || !containerRef.current || mapInstance.current) return;
       const center = initialRegion ? [initialRegion.latitude, initialRegion.longitude] : DEFAULT_CENTER;
       const map = L.map(containerRef.current).setView(center, initialRegion ? 12 : 4);
-      const baseLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors",
-      }).addTo(map);
+      // Satellite can only ever be chosen after the map (and therefore the
+      // Layers panel) is already visible, so the base layer this effect
+      // creates on mount is always "map" in practice — the separate
+      // baseLayer-swap effect below takes over for any later toggle.
+      const initialBase = L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION }).addTo(map);
+      initialBase.__baseLayerKind = "map";
+      baseTileLayerRef.current = initialBase;
       // A tile that fails to load (a transient network blip, a momentarily
       // overloaded OSM server) otherwise just stays blank forever on a small
       // preview card the user never pans — nothing else would ever re-request
       // it. A couple of delayed retries usually recovers it.
       const tileRetries = new WeakMap<object, number>();
-      baseLayer.on("tileerror", (e: { tile: HTMLImageElement; coords: object }) => {
+      initialBase.on("tileerror", (e: { tile: HTMLImageElement; coords: object }) => {
         const attempt = tileRetries.get(e.coords) ?? 0;
         if (attempt >= 3) return;
         tileRetries.set(e.coords, attempt + 1);
@@ -480,6 +501,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
             // that tile instead of requesting tiles that don't exist.
             maxNativeZoom: 13,
           }).addTo(map);
+          lidarLayerRef.current.getContainer().style.filter = `contrast(${lidarContrast}%)`;
         }
       } else if (lidarLayerRef.current) {
         map.removeLayer(lidarLayerRef.current);
@@ -489,12 +511,42 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLidar]);
 
-  // Separate from the effect above so dragging the opacity slider just
-  // calls setOpacity on the already-added layer instead of removing and
+  // Separate from the effect above so dragging the opacity/contrast
+  // sliders just updates the already-added layer instead of removing and
   // re-adding it (which would flash the tiles and re-request them).
   useEffect(() => {
     lidarLayerRef.current?.setOpacity(lidarOpacity);
   }, [lidarOpacity]);
+
+  useEffect(() => {
+    const container = lidarLayerRef.current?.getContainer();
+    if (container) container.style.filter = `contrast(${lidarContrast}%)`;
+  }, [lidarContrast]);
+
+  // Swaps the base map for satellite (or back). The very first base layer
+  // is created by the map-init effect above using whatever baseLayer was
+  // current at mount — this only ever needs to run for a later toggle,
+  // which can't happen before the map (and therefore the Layers panel the
+  // toggle lives in) already exists, so skipping the swap while the map
+  // isn't ready yet is safe rather than a race to worry about.
+  useEffect(() => {
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      const current = baseTileLayerRef.current;
+      if (!map || !current) return;
+      const isSatellite = current.__baseLayerKind === "satellite";
+      if ((baseLayer === "satellite") === isSatellite) return;
+      map.removeLayer(current);
+      const next = L.tileLayer(baseLayer === "satellite" ? SATELLITE_TILE_URL : OSM_TILE_URL, {
+        attribution: baseLayer === "satellite" ? SATELLITE_ATTRIBUTION : OSM_ATTRIBUTION,
+      });
+      // Keep it beneath every overlay layer added since mount (lidar,
+      // radar, saved-point markers, ...) rather than on top of them.
+      next.addTo(map).bringToBack();
+      next.__baseLayerKind = baseLayer;
+      baseTileLayerRef.current = next;
+    });
+  }, [baseLayer]);
 
   useEffect(() => {
     loadLeaflet().then((L) => {
