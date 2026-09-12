@@ -75,6 +75,10 @@ interface MapCanvasProps {
   // an overlay under the usual OSM tiles — a static tile pyramid, unlike
   // radar's per-frame template, so no async fetch is needed to turn it on.
   showLidar?: boolean;
+  // 0-1, how opaque that overlay is — defaults to 0.7. Applied to the
+  // existing layer via setOpacity rather than recreating it, so dragging
+  // the Layers panel's slider doesn't reload every tile on every change.
+  lidarOpacity?: number;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -195,6 +199,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     showRadar,
     showTimezoneBands,
     showLidar,
+    lidarOpacity = 0.7,
     showPins = true,
     showFlights,
     showWikipedia,
@@ -463,8 +468,17 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       if (showLidar) {
         if (!lidarLayerRef.current) {
           lidarLayerRef.current = L.tileLayer(USGS_LIDAR_TILE_URL, {
-            opacity: 0.7,
+            opacity: lidarOpacity,
             attribution: USGS_LIDAR_ATTRIBUTION,
+            // USGS's own cache only actually has tiles through zoom 13 —
+            // past that every request 404s (confirmed by hand; the
+            // service's metadata advertises levels up to 23, but that's
+            // just the declared resolution, not what's really cached),
+            // which without this made the whole layer silently vanish
+            // once zoomed in past a city block or so. Same fix as radar's
+            // maxNativeZoom below: stop requesting past 13 and upscale
+            // that tile instead of requesting tiles that don't exist.
+            maxNativeZoom: 13,
           }).addTo(map);
         }
       } else if (lidarLayerRef.current) {
@@ -472,7 +486,15 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
         lidarLayerRef.current = null;
       }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLidar]);
+
+  // Separate from the effect above so dragging the opacity slider just
+  // calls setOpacity on the already-added layer instead of removing and
+  // re-adding it (which would flash the tiles and re-request them).
+  useEffect(() => {
+    lidarLayerRef.current?.setOpacity(lidarOpacity);
+  }, [lidarOpacity]);
 
   useEffect(() => {
     loadLeaflet().then((L) => {

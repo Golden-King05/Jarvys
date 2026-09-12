@@ -33,6 +33,7 @@ function AuthedApp() {
   const [showWikipedia, setShowWikipedia] = useState(false);
   const [showOsm, setShowOsm] = useState(false);
   const [showLidar, setShowLidar] = useState(false);
+  const [lidarOpacity, setLidarOpacity] = useState(0.7);
 
   function handleLayerCommand(cmd: LayerCommand) {
     if (cmd.layer === "radar") setShowRadar(cmd.enabled);
@@ -86,6 +87,8 @@ function AuthedApp() {
             setShowOsm={setShowOsm}
             showLidar={showLidar}
             setShowLidar={setShowLidar}
+            lidarOpacity={lidarOpacity}
+            setLidarOpacity={setLidarOpacity}
           />
         ) : null}
         {tab === "settings" ? <SettingsScreen /> : null}

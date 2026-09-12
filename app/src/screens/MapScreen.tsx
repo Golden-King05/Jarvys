@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import * as Location from "expo-location";
+import Slider from "@react-native-community/slider";
 import { Ionicons } from "@expo/vector-icons";
 import MapCanvas, { type MapCanvasHandle } from "../components/MapCanvas";
 import OsmClusterModal from "../components/OsmClusterModal";
@@ -66,6 +67,8 @@ interface MapScreenProps {
   setShowOsm: (v: boolean) => void;
   showLidar: boolean;
   setShowLidar: (v: boolean) => void;
+  lidarOpacity: number;
+  setLidarOpacity: (v: number) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "osm-import" | "awaiting-tap";
@@ -189,6 +192,8 @@ export default function MapScreen({
   setShowOsm,
   showLidar,
   setShowLidar,
+  lidarOpacity,
+  setLidarOpacity,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const mapCanvasRef = useRef<MapCanvasHandle>(null);
@@ -866,6 +871,7 @@ export default function MapScreen({
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
           showLidar={showLidar}
+          lidarOpacity={lidarOpacity}
           showPins={showPins}
           showFlights={showFlights}
           showWikipedia={showWikipedia}
@@ -1052,13 +1058,26 @@ export default function MapScreen({
               <Switch value={showOsm} onValueChange={setShowOsm} />
             </View>
 
-            <View style={styles.layerRow}>
+            <View style={showLidar ? styles.layerRowNoBorder : styles.layerRow}>
               <View style={styles.layerLabelBox}>
                 <Text style={styles.layerLabel}>USGS lidar terrain</Text>
                 <Text style={styles.layerHint}>Shaded-relief terrain from USGS's nationwide lidar/DEM data</Text>
               </View>
               <Switch value={showLidar} onValueChange={setShowLidar} />
             </View>
+            {showLidar ? (
+              <View style={styles.lidarOpacityRow}>
+                <Text style={styles.layerHint}>Opacity</Text>
+                <Slider
+                  style={styles.lidarOpacitySlider}
+                  minimumValue={0.1}
+                  maximumValue={1}
+                  value={lidarOpacity}
+                  onValueChange={setLidarOpacity}
+                  minimumTrackTintColor="#2980b9"
+                />
+              </View>
+            ) : null}
 
             <View style={styles.layerRow}>
               <View style={styles.layerLabelBox}>
@@ -1554,9 +1573,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#eee",
   },
+  layerRowNoBorder: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
   layerLabelBox: { flex: 1, marginRight: 12 },
   layerLabel: { fontFamily: fonts.medium, fontSize: 14, color: "#222" },
   layerHint: { fontFamily: fonts.regular, fontSize: 11, color: "#888", marginTop: 2 },
+  lidarOpacityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  lidarOpacitySlider: { flex: 1, height: 32 },
   choiceButton: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "#eee" },
   choiceText: { fontFamily: fonts.medium, fontSize: 14, color: "#2980b9" },
   cancelLink: { marginTop: 14, alignSelf: "flex-start" },

@@ -45,6 +45,8 @@ interface MapCanvasProps {
   // an overlay — a static tile URL, unlike radar's per-frame template, so
   // no state/fetch is needed to turn it on.
   showLidar?: boolean;
+  // 0-1, how opaque that overlay is — defaults to 0.7.
+  lidarOpacity?: number;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -149,6 +151,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     showRadar,
     showTimezoneBands,
     showLidar,
+    lidarOpacity = 0.7,
     showPins = true,
     showFlights,
     showWikipedia,
@@ -348,7 +351,15 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       showsUserLocation={showLiveLocation}
       showsMyLocationButton={showLiveLocation}
     >
-      {showLidar ? <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={0.7} /> : null}
+      {showLidar ? (
+        // USGS's own cache only actually has tiles through zoom 13 — past
+        // that every request 404s (confirmed by hand; the service's
+        // metadata advertises levels up to 23, but that's the declared
+        // resolution, not what's really cached), which without
+        // maximumNativeZ made the whole layer silently vanish once zoomed
+        // in past a city block or so.
+        <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={lidarOpacity} maximumNativeZ={13} />
+      ) : null}
 
       {radarTemplate ? (
         // RainViewer's radar tiles only actually exist up to zoom 7 — past
