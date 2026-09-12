@@ -369,8 +369,17 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
         // metadata advertises levels up to 23, but that's the declared
         // resolution, not what's really cached), which without
         // maximumNativeZ made the whole layer silently vanish once zoomed
-        // in past a city block or so.
-        <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={lidarOpacity} maximumNativeZ={13} />
+        // in past a city block or so. maximumZ caps how far that same
+        // zoom-13 tile gets stretched to cover deeper zooms before hiding
+        // the layer instead — left uncapped it kept upscaling all the way
+        // to the map's own much deeper zoom, into an unreadable blur.
+        <UrlTile
+          urlTemplate={USGS_LIDAR_TILE_URL}
+          zIndex={0}
+          opacity={lidarOpacity}
+          maximumNativeZ={13}
+          maximumZ={16}
+        />
       ) : null}
 
       {radarTemplate ? (

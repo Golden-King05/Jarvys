@@ -32,6 +32,11 @@ const WIKI_POLL_MS = 8000;
 // shows nothing rather than that misleading result, the same way saved pins
 // stay hidden until zoomed in.
 const MIN_WIKI_ZOOM = 12;
+// How far past the lidar layer's own maxNativeZoom (13) its last real tile
+// keeps getting stretched before the layer just hides instead — deeper
+// than this the upscaling looks like an unreadable blur rather than a
+// slightly-soft relief. Restored automatically on zooming back out.
+const LIDAR_MAX_DISPLAY_ZOOM = 16;
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -237,6 +242,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
   const layerGroup = useRef<Leaflet>(null);
   const radarLayerRef = useRef<Leaflet>(null);
   const lidarLayerRef = useRef<Leaflet>(null);
+  const lidarZoomHandlerRef = useRef<(() => void) | null>(null);
   const baseTileLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
   const flightsLayerRef = useRef<Leaflet>(null);
@@ -488,7 +494,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       if (!map) return;
       if (showLidar) {
         if (!lidarLayerRef.current) {
-          lidarLayerRef.current = L.tileLayer(USGS_LIDAR_TILE_URL, {
+          const layer = L.tileLayer(USGS_LIDAR_TILE_URL, {
             opacity: lidarOpacity,
             attribution: USGS_LIDAR_ATTRIBUTION,
             // USGS's own cache only actually has tiles through zoom 13 —
@@ -500,10 +506,39 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
             // maxNativeZoom below: stop requesting past 13 and upscale
             // that tile instead of requesting tiles that don't exist.
             maxNativeZoom: 13,
+            // Deliberately not using this layer's own `maxZoom` option to
+            // hide it past a certain zoom (tried first) — Leaflet computes
+            // the *whole map's* allowed zoom range as the minimum maxZoom
+            // across every currently-added layer, so that would have
+            // capped the entire map (base layer, markers, everything) at
+            // whatever zoom this one layer chose, not just hidden this
+            // layer. The zoomend listener below hides it without touching
+            // the map's own zoom range.
           }).addTo(map);
-          lidarLayerRef.current.getContainer().style.filter = `contrast(${lidarContrast}%)`;
+          layer.getContainer().style.filter = `contrast(${lidarContrast}%)`;
+          lidarLayerRef.current = layer;
+
+          // Upscaling that zoom-13 tile only looks acceptable for a couple
+          // of zoom levels past it — left unbounded, zooming in further
+          // (however deep the base/satellite layer's own native zoom goes)
+          // kept stretching that same tile into an unreadable blur. Hiding
+          // it past LIDAR_MAX_DISPLAY_ZOOM trades "gone at extreme zoom"
+          // for "not a smear", the same tradeoff already accepted for
+          // radar at maxNativeZoom's own limit — restored automatically on
+          // zooming back out.
+          const updateLidarVisibility = () => {
+            const container = layer.getContainer();
+            if (container) container.style.display = map.getZoom() > LIDAR_MAX_DISPLAY_ZOOM ? "none" : "";
+          };
+          updateLidarVisibility();
+          map.on("zoomend", updateLidarVisibility);
+          lidarZoomHandlerRef.current = updateLidarVisibility;
         }
       } else if (lidarLayerRef.current) {
+        if (lidarZoomHandlerRef.current) {
+          map.off("zoomend", lidarZoomHandlerRef.current);
+          lidarZoomHandlerRef.current = null;
+        }
         map.removeLayer(lidarLayerRef.current);
         lidarLayerRef.current = null;
       }
