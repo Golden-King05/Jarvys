@@ -6,6 +6,7 @@ import { useAuth } from "../AuthContext";
 import { outerRings } from "../utils/geojson";
 import { inferOsmCategory, osmElementKey, suggestOsmIcon, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
+import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
@@ -40,6 +41,10 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Shows USGS's shaded-relief basemap (built from 3DEP lidar/DEM data) as
+  // an overlay — a static tile URL, unlike radar's per-frame template, so
+  // no state/fetch is needed to turn it on.
+  showLidar?: boolean;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -143,6 +148,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     pendingMarker,
     showRadar,
     showTimezoneBands,
+    showLidar,
     showPins = true,
     showFlights,
     showWikipedia,
@@ -342,6 +348,8 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       showsUserLocation={showLiveLocation}
       showsMyLocationButton={showLiveLocation}
     >
+      {showLidar ? <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={0.7} /> : null}
+
       {radarTemplate ? (
         // RainViewer's radar tiles only actually exist up to zoom 7 — past
         // that it serves a "Zoom Level Not Supported" placeholder image

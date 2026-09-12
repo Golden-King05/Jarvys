@@ -64,6 +64,8 @@ interface MapScreenProps {
   setShowWikipedia: (v: boolean) => void;
   showOsm: boolean;
   setShowOsm: (v: boolean) => void;
+  showLidar: boolean;
+  setShowLidar: (v: boolean) => void;
 }
 
 type AddStep = "closed" | "choose" | "manual-coords" | "url" | "details" | "osm-import" | "awaiting-tap";
@@ -185,6 +187,8 @@ export default function MapScreen({
   setShowWikipedia,
   showOsm,
   setShowOsm,
+  showLidar,
+  setShowLidar,
 }: MapScreenProps) {
   const { baseUrl, token } = useAuth();
   const mapCanvasRef = useRef<MapCanvasHandle>(null);
@@ -861,6 +865,7 @@ export default function MapScreen({
           pendingMarker={addStep === "details" ? pendingLocation : null}
           showRadar={showRadar}
           showTimezoneBands={showTimezoneBands}
+          showLidar={showLidar}
           showPins={showPins}
           showFlights={showFlights}
           showWikipedia={showWikipedia}
@@ -1045,6 +1050,14 @@ export default function MapScreen({
                 <Text style={styles.layerHint}>Query raw OSM data in view and import what you want</Text>
               </View>
               <Switch value={showOsm} onValueChange={setShowOsm} />
+            </View>
+
+            <View style={styles.layerRow}>
+              <View style={styles.layerLabelBox}>
+                <Text style={styles.layerLabel}>USGS lidar terrain</Text>
+                <Text style={styles.layerHint}>Shaded-relief terrain from USGS's nationwide lidar/DEM data</Text>
+              </View>
+              <Switch value={showLidar} onValueChange={setShowLidar} />
             </View>
 
             <View style={styles.layerRow}>

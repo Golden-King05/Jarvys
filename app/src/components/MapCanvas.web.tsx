@@ -3,6 +3,7 @@ import { api, type MapPoint, type RegionMapData, type WikipediaCluster } from ".
 import { useAuth } from "../AuthContext";
 import { inferOsmCategory, osmElementKey, suggestOsmIcon, type OsmCluster } from "../utils/osm";
 import { getRadarTileTemplate } from "../utils/radar";
+import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import { statusColor } from "../utils/regionStatus";
 import { formatOffset, getTimezoneBands } from "../utils/timezoneBands";
 import { boxContains, padBox, type LatLonBox } from "../utils/geoBox";
@@ -70,6 +71,10 @@ interface MapCanvasProps {
   pendingMarker?: { lat: number; lon: number } | null;
   showRadar?: boolean;
   showTimezoneBands?: boolean;
+  // Shows USGS's shaded-relief basemap (built from 3DEP lidar/DEM data) as
+  // an overlay under the usual OSM tiles — a static tile pyramid, unlike
+  // radar's per-frame template, so no async fetch is needed to turn it on.
+  showLidar?: boolean;
   // Hides the saved-point markers entirely (the Layers panel's "Saved pins"
   // switch) — defaults to shown.
   showPins?: boolean;
@@ -189,6 +194,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     pendingMarker,
     showRadar,
     showTimezoneBands,
+    showLidar,
     showPins = true,
     showFlights,
     showWikipedia,
@@ -209,6 +215,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
   const mapInstance = useRef<Leaflet>(null);
   const layerGroup = useRef<Leaflet>(null);
   const radarLayerRef = useRef<Leaflet>(null);
+  const lidarLayerRef = useRef<Leaflet>(null);
   const tzLayerRef = useRef<Leaflet>(null);
   const flightsLayerRef = useRef<Leaflet>(null);
   const wikiLayerRef = useRef<Leaflet>(null);
@@ -448,6 +455,24 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       cancelled = true;
     };
   }, [showRadar]);
+
+  useEffect(() => {
+    loadLeaflet().then((L) => {
+      const map = mapInstance.current;
+      if (!map) return;
+      if (showLidar) {
+        if (!lidarLayerRef.current) {
+          lidarLayerRef.current = L.tileLayer(USGS_LIDAR_TILE_URL, {
+            opacity: 0.7,
+            attribution: USGS_LIDAR_ATTRIBUTION,
+          }).addTo(map);
+        }
+      } else if (lidarLayerRef.current) {
+        map.removeLayer(lidarLayerRef.current);
+        lidarLayerRef.current = null;
+      }
+    });
+  }, [showLidar]);
 
   useEffect(() => {
     loadLeaflet().then((L) => {
