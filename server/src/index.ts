@@ -5,6 +5,7 @@ import { authRouter } from "./routes/auth.js";
 import { assistantRouter } from "./routes/assistant.js";
 import { flightsRouter } from "./routes/flights.js";
 import { geocodeRouter } from "./routes/geocode.js";
+import { lidarTilesRouter } from "./routes/lidarTiles.js";
 import { osmRouter } from "./routes/osm.js";
 import { pointsRouter } from "./routes/points.js";
 import { wikipediaRouter } from "./routes/wikipedia.js";
@@ -22,6 +23,7 @@ app.use("/flights", flightsRouter);
 app.use("/wikipedia", wikipediaRouter);
 app.use("/osm", osmRouter);
 app.use("/geocode", geocodeRouter);
+app.use("/lidar-tiles", lidarTilesRouter);
 
 // Last-resort net: any route error that reaches here (typically forwarded by
 // asyncHandler) gets a clean response instead of an unhandled exception.

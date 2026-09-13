@@ -6,7 +6,7 @@ import { tokenStorage } from "./storage";
 // local-dev leftover from before the server was hosted, and having to type
 // a server address to log in was just friction with nothing useful behind
 // it now that there's only ever one server to point at.
-const BASE_URL = "https://jarvys-server-14df.onrender.com";
+export const BASE_URL = "https://jarvys-server-14df.onrender.com";
 
 // "checking" while a wake-up ping is in flight, "warm" once the server has
 // answered, "cold" if even the generous wake-up timeout was exceeded (still
