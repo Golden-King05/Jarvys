@@ -83,11 +83,31 @@ function chamferDistanceTransform(edge: Uint8Array, w: number, h: number): Float
   return dist;
 }
 
+// The real bug behind "the trace wanders off into a field/lot for no
+// reason": a bare `1 / (1 + dist)` cost keeps getting CHEAPER the farther
+// a pixel is from any edge, with no ceiling — so a big open field 30px
+// from the nearest edge scored roughly 5x cheaper than the actual road
+// centerline (which sits only ~5px from its own two edges). That's not
+// randomness, it's the pathfinder correctly finding the objectively
+// cheapest route under a cost surface that rewards open space over the
+// road itself (confirmed by hand: cost(5)=0.167 vs cost(30)=0.032).
+// Capping the distance credit at a plausible real road half-width fixes
+// this — past that cap, being farther from an edge buys nothing further,
+// so an open field and the road's own centerline become cost-competitive
+// instead of the field strictly winning, and the corridor/baseline-step
+// cost then keeps the path from wandering somewhere that offers no actual
+// advantage.
+const ASSUMED_MAX_ROAD_HALF_WIDTH_M = 12; // generous — covers most residential/collector roads plus verge
+
+function metersPerPixel(zoom: number, lat: number): number {
+  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
+}
+
 // Builds a per-pixel traversal cost surface from one imagery source: low
 // near the ridge equidistant between edges (the presumed centerline), high
 // right on an edge, +Infinity where this source has no data at all (a
 // blank/failed tile) so a blank patch never looks artificially attractive.
-function buildCostSurface(canvas: HTMLCanvasElement): Float32Array {
+function buildCostSurface(canvas: HTMLCanvasElement, maxDistPx: number): Float32Array {
   const { gray, alpha, w, h } = grayscaleWithAlpha(canvas);
   const mag = sobelMagnitude(gray, w, h);
   let maxMag = 0;
@@ -98,7 +118,8 @@ function buildCostSurface(canvas: HTMLCanvasElement): Float32Array {
   const dist = chamferDistanceTransform(edge, w, h);
   const cost = new Float32Array(w * h);
   for (let i = 0; i < cost.length; i++) {
-    cost[i] = alpha[i] === 0 ? Infinity : 1 / (1 + dist[i]);
+    const cappedDist = Math.min(dist[i], maxDistPx);
+    cost[i] = alpha[i] === 0 ? Infinity : 1 / (1 + cappedDist);
   }
   return cost;
 }
@@ -277,8 +298,10 @@ export async function traceRoadSegment(start: LatLon, end: LatLon, preferredZoom
     throw new Error("Could not load satellite or lidar imagery for this area");
   }
 
-  const costA = satelliteOk ? buildCostSurface(satelliteMosaic!.canvas) : null;
-  const costB = lidarOk ? buildCostSurface(lidarMosaic!.canvas) : null;
+  const avgLat = (start.lat + end.lat) / 2;
+  const maxDistPx = Math.max(3, ASSUMED_MAX_ROAD_HALF_WIDTH_M / metersPerPixel(zoom, avgLat));
+  const costA = satelliteOk ? buildCostSurface(satelliteMosaic!.canvas, maxDistPx) : null;
+  const costB = lidarOk ? buildCostSurface(lidarMosaic!.canvas, maxDistPx) : null;
   const fused = new Float32Array(grid.widthPx * grid.heightPx);
   for (let i = 0; i < fused.length; i++) {
     const a = costA ? costA[i] : Infinity;
