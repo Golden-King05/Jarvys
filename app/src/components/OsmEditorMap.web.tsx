@@ -627,7 +627,13 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 dashArray: el.action === "delete" ? "6 4" : undefined,
               });
           shape.addTo(layer).on("click", (e: { originalEvent: Event }) => {
-            e.originalEvent.stopPropagation();
+            // e.originalEvent.stopPropagation() alone only stops native DOM
+            // bubbling — Leaflet fires its own map "click" separately by
+            // walking each layer's _eventParents (see Layer#_propagateEvent),
+            // independent of native propagation, so without this the map's
+            // own click handler below still ran right after and deselected
+            // whatever was just selected in the same tick.
+            L.DomEvent.stopPropagation(e);
             onSelectRef.current(key);
           });
         }
@@ -645,7 +651,10 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           draggable: true,
         }).addTo(layer);
         marker.on("click", (e: { originalEvent: Event }) => {
-          e.originalEvent.stopPropagation();
+          // Same Leaflet gotcha as the way/polygon click handler above —
+          // native stopPropagation() doesn't stop Leaflet's own internal
+          // event propagation to the map's click handler.
+          L.DomEvent.stopPropagation(e);
           handleNodeClick(L, el.id, geom.lat, geom.lon);
         });
         marker.on("dragend", () => {
