@@ -7,6 +7,7 @@ import { flightsRouter } from "./routes/flights.js";
 import { geocodeRouter } from "./routes/geocode.js";
 import { lidarTilesRouter } from "./routes/lidarTiles.js";
 import { osmRouter } from "./routes/osm.js";
+import { osmEditorRouter } from "./routes/osmEditor.js";
 import { pointsRouter } from "./routes/points.js";
 import { wikipediaRouter } from "./routes/wikipedia.js";
 
@@ -22,6 +23,7 @@ app.use("/points", pointsRouter);
 app.use("/flights", flightsRouter);
 app.use("/wikipedia", wikipediaRouter);
 app.use("/osm", osmRouter);
+app.use("/osm-editor", osmEditorRouter);
 app.use("/geocode", geocodeRouter);
 app.use("/lidar-tiles", lidarTilesRouter);
 

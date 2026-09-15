@@ -115,6 +115,56 @@ export interface OsmElement {
   tags: Record<string, string>;
 }
 
+// --- JLOSME (in-app OSM editor) -----------------------------------------
+
+export type OsmEditorAction = "none" | "create" | "modify" | "delete";
+
+export interface OsmEditorNodeGeometry {
+  lat: number;
+  lon: number;
+}
+export interface OsmEditorWayGeometry {
+  nodeIds: number[];
+}
+export interface OsmEditorRelationMember {
+  type: OsmElementType;
+  ref: number;
+  role: string;
+}
+export interface OsmEditorRelationGeometry {
+  members: OsmEditorRelationMember[];
+}
+export type OsmEditorGeometry = OsmEditorNodeGeometry | OsmEditorWayGeometry | OsmEditorRelationGeometry;
+
+// One node/way/relation in the editor's local working set — either
+// downloaded from OpenStreetMap via Overpass or created here and not yet
+// uploaded (a negative `id`). `action` says what, if anything, needs to be
+// uploaded: 'none' (clean, matches OSM), 'create'/'modify'/'delete'
+// (pending).
+export interface OsmEditorElement {
+  type: OsmElementType;
+  id: number;
+  version: number | null;
+  action: OsmEditorAction;
+  tags: Record<string, string>;
+  geometry: OsmEditorGeometry;
+}
+
+export type OsmEditorArea =
+  | { kind: "bbox"; south: number; west: number; north: number; east: number }
+  | { kind: "polygon"; points: { lat: number; lon: number }[] };
+
+export type OsmUploadTarget = "sandbox" | "production";
+
+export interface OsmUploadResult {
+  ok: true;
+  changesetId: number;
+  target: OsmUploadTarget;
+  created: number;
+  modified: number;
+  deleted: number;
+}
+
 export interface WikipediaArticle {
   pageid: number;
   title: string;
@@ -393,4 +443,96 @@ export const api = {
 
   deletePoint: (baseUrl: string, token: string, id: string) =>
     request<{ ok: boolean }>(baseUrl, `/points/${id}`, { method: "DELETE", token }),
+
+  // --- JLOSME (in-app OSM editor) ---------------------------------------
+
+  // OSM's own wiki-backed tag vocabulary (via Taginfo) — feeds TagsEditor
+  // the same way this app's own point-tags definitions do, just for real
+  // OSM keys/values instead.
+  getOsmEditorTagDefinitions: (baseUrl: string, token: string) =>
+    request<{ definitions: TagDefinition[] }>(baseUrl, "/osm-editor/tag-definitions", { token }),
+
+  getOsmEditorElements: (baseUrl: string, token: string) =>
+    request<{ elements: OsmEditorElement[] }>(baseUrl, "/osm-editor/elements", { token }),
+
+  // Downloads everything inside a drawn boundary (or bbox) via Overpass and
+  // merges it into the working set — call again with a new area to "expand
+  // selection"; the server-side merge never disturbs an element already
+  // being edited. Returns the full merged working set.
+  downloadOsmEditorArea: (baseUrl: string, token: string, area: OsmEditorArea) =>
+    request<{ elements: OsmEditorElement[]; downloadedCount: number; truncated: boolean }>(
+      baseUrl,
+      "/osm-editor/download",
+      { method: "POST", token, body: { area } }
+    ),
+
+  createOsmEditorElement: (
+    baseUrl: string,
+    token: string,
+    element: { type: OsmElementType; tags?: Record<string, string>; geometry: OsmEditorGeometry }
+  ) => request<OsmEditorElement>(baseUrl, "/osm-editor/elements", { method: "POST", token, body: element }),
+
+  patchOsmEditorElement: (
+    baseUrl: string,
+    token: string,
+    type: OsmElementType,
+    id: number,
+    patch: { tags?: Record<string, string>; geometry?: OsmEditorGeometry }
+  ) =>
+    request<OsmEditorElement>(baseUrl, `/osm-editor/elements/${type}/${id}`, {
+      method: "PATCH",
+      token,
+      body: patch,
+    }),
+
+  deleteOsmEditorElement: (baseUrl: string, token: string, type: OsmElementType, id: number) =>
+    request<{ ok: boolean; removed: boolean }>(baseUrl, `/osm-editor/elements/${type}/${id}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  clearOsmEditorWorkingSet: (baseUrl: string, token: string) =>
+    request<{ ok: boolean }>(baseUrl, "/osm-editor/elements", { method: "DELETE", token }),
+
+  // Uploads every pending edit as one OSM changeset. `osmToken` is the
+  // user's own OSM OAuth2 access token (from the OSM login button, never
+  // this app's own auth token) — sent as a separate header since it
+  // authenticates against OpenStreetMap's API, not this server. Uses fetch
+  // directly (rather than the generic request() helper) so that header can
+  // ride along, and so a 502 with OSM's own plain-text error (e.g. a 409
+  // version conflict) surfaces legibly instead of being swallowed.
+  uploadOsmChangeset: async (
+    baseUrl: string,
+    token: string,
+    osmToken: string,
+    body: { target: OsmUploadTarget; comment: string }
+  ): Promise<OsmUploadResult> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(`${baseUrl}/osm-editor/upload`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "X-OSM-Token": osmToken,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        throw new ApiError("The upload is taking a while — check OpenStreetMap directly before retrying.");
+      }
+      throw new ApiError("Couldn't reach the server — check your connection and try again.");
+    } finally {
+      clearTimeout(timeout);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new ApiError(data.error ?? `Upload failed (${res.status})`);
+    }
+    return data as OsmUploadResult;
+  },
 };

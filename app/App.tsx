@@ -15,10 +15,11 @@ import type { LayerCommand, MapData } from "./src/api";
 import type { BaseLayerKind } from "./src/utils/baseLayer";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import JlosmeScreen from "./src/screens/JlosmeScreen";
 import MapScreen from "./src/screens/MapScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 
-type Tab = "chat" | "map" | "settings";
+type Tab = "chat" | "map" | "editor" | "settings";
 
 function AuthedApp() {
   const [tab, setTab] = useState<Tab>("chat");
@@ -55,6 +56,9 @@ function AuthedApp() {
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setTab("map")}>
             <Text style={tab === "map" ? styles.tabActive : styles.tab}>Map</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setTab("editor")}>
+            <Text style={tab === "editor" ? styles.tabActive : styles.tab}>JLOSME</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity onPress={() => setTab("settings")} hitSlop={8}>
@@ -98,6 +102,7 @@ function AuthedApp() {
             setBaseLayer={setBaseLayer}
           />
         ) : null}
+        {tab === "editor" ? <JlosmeScreen /> : null}
         {tab === "settings" ? <SettingsScreen /> : null}
       </View>
     </View>

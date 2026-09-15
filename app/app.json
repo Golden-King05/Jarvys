@@ -3,6 +3,7 @@
     "name": "Jarvys",
     "slug": "jarvys",
     "version": "0.1.0",
+    "scheme": "jarvys",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -28,7 +29,8 @@
         {
           "locationWhenInUsePermission": "Jarvys uses your location to center the map near you."
         }
-      ]
+      ],
+      "expo-web-browser"
     ]
   }
 }

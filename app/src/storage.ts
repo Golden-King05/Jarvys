@@ -1,9 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const TOKEN_KEY = "jarvys.token";
+// AsyncStorage is already cross-platform (web via localStorage, native via
+// its own backing store) — this just wraps one key at a time behind the
+// same get/set/clear shape every caller already expects, so a new bit of
+// per-viewer state (which OSM upload target was last selected, say) doesn't
+// need its own bespoke wrapper.
+export function makeKeyStorage(key: string) {
+  return {
+    get: () => AsyncStorage.getItem(key),
+    set: (value: string) => AsyncStorage.setItem(key, value),
+    clear: () => AsyncStorage.removeItem(key),
+  };
+}
 
-export const tokenStorage = {
-  get: () => AsyncStorage.getItem(TOKEN_KEY),
-  set: (token: string) => AsyncStorage.setItem(TOKEN_KEY, token),
-  clear: () => AsyncStorage.removeItem(TOKEN_KEY),
-};
+export const tokenStorage = makeKeyStorage("jarvys.token");
