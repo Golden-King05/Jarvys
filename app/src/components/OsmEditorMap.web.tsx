@@ -618,7 +618,10 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 color, // outline stays action-colored — what you've done to it
                 weight: selected ? 5 : 3,
                 fillColor: areaFillColor(el.tags), // fill is tag-colored — what it is
-                fillOpacity: 0.35,
+                // JOSM keeps its area fills close to full strength rather
+                // than washing them out — 0.35 read as barely-there next to
+                // the outline, especially over satellite/lidar imagery.
+                fillOpacity: 0.55,
                 dashArray: el.action === "delete" ? "6 4" : undefined,
               })
             : L.polyline(latlngs, {

@@ -186,7 +186,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 key={key}
                 coordinates={latlngs}
                 strokeColor={color}
-                fillColor={withAlpha(areaFillColor(el.tags), 0.35)}
+                fillColor={withAlpha(areaFillColor(el.tags), 0.55)}
                 strokeWidth={selected ? 5 : 3}
                 tappable
                 onPress={() => onSelect(osmEditorElementKey("way", el.id))}
