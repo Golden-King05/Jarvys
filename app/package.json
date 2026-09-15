@@ -25,6 +25,7 @@
     "expo-speech": "~57.0.2",
     "expo-status-bar": "~57.0.1",
     "expo-web-browser": "~57.0.3",
+    "onnxruntime-web": "^1.30.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",

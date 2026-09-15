@@ -5,6 +5,7 @@ import type { OsmEditorElement } from "../api";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import { nodeGeometry, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
+import type { AiTraceStatus } from "../utils/aiTraceTypes";
 
 // Native (react-native-maps) counterpart to OsmEditorMap.web.tsx — same
 // props/imperative handle shape so JlosmeScreen can use either without
@@ -19,7 +20,7 @@ import type { LatLonBox } from "../utils/geoBox";
 // express with a plain URL template — so "bing" falls back to the standard
 // map style; the imagery picker (JlosmeScreen) hides the Bing option on
 // native for that reason.
-export type EditorMode = "view" | "draw-boundary" | "new-node" | "new-way";
+export type EditorMode = "view" | "draw-boundary" | "new-node" | "new-way" | "ai-trace-building" | "ai-trace-road";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
 export type WayDraftPoint = { existingId: number } | { lat: number; lon: number };
@@ -30,9 +31,15 @@ interface OsmEditorMapProps {
   onSelect: (key: string | null) => void;
   mode: EditorMode;
   onBoundaryFinish: (points: { lat: number; lon: number }[]) => void;
-  onWayFinish: (points: WayDraftPoint[]) => void;
+  onWayFinish: (points: WayDraftPoint[], closeLoop?: boolean) => void;
   onCreateNode: (lat: number, lon: number) => void;
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
+  // The two AI-assisted tracing tools (ai-trace-building, ai-trace-road)
+  // are web-only — see OsmEditorMap.web.tsx. Their toolbar buttons in
+  // JlosmeScreen only render on web, so `mode` never actually becomes
+  // either value here; this prop exists purely so both platform files
+  // share one prop interface.
+  onAiTraceStatus: (status: AiTraceStatus) => void;
   baseLayer: EditorBaseLayer;
   showLidar: boolean;
   lidarOpacity: number;

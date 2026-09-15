@@ -5,6 +5,11 @@ import { OSM_ATTRIBUTION, OSM_TILE_URL, SATELLITE_ATTRIBUTION, SATELLITE_TILE_UR
 import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import { osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
+import type { AiTraceStatus } from "../utils/aiTraceTypes";
+import { captureMapRegion, type CapturedRegion } from "../utils/mapCapture";
+import { decodeClick, encodeRegion, loadMobileSam, SAM_INPUT_SIZE, type MobileSamSession, type SamEmbedding } from "../utils/mobileSam";
+import { connectedComponentAt, douglasPeucker, traceComponentBoundary, type Pt } from "../utils/traceGeometry";
+import { traceRoadSegment, type LatLon } from "../utils/roadTrace";
 
 // Same runtime-loaded Leaflet (CDN, no npm package) as MapCanvas.web.tsx —
 // reuses that exact loader rather than a second copy of the load logic.
@@ -34,7 +39,7 @@ function loadLeaflet(): Promise<Leaflet> {
   return leafletLoadPromise;
 }
 
-export type EditorMode = "view" | "draw-boundary" | "new-node" | "new-way";
+export type EditorMode = "view" | "draw-boundary" | "new-node" | "new-way" | "ai-trace-building" | "ai-trace-road";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
 // One vertex picked while drawing a new way — either a reference to an
@@ -49,9 +54,17 @@ interface OsmEditorMapProps {
   onSelect: (key: string | null) => void;
   mode: EditorMode;
   onBoundaryFinish: (points: { lat: number; lon: number }[]) => void;
-  onWayFinish: (points: WayDraftPoint[]) => void;
+  // `closeLoop`: when true, the caller should close the way by reusing the
+  // first created node's id as the last node too (used by the AI building
+  // tracer's closed-polygon draft) — the manual "new way" tool never sets
+  // this.
+  onWayFinish: (points: WayDraftPoint[], closeLoop?: boolean) => void;
   onCreateNode: (lat: number, lon: number) => void;
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
+  // Reports progress/state for the two AI-assisted tracing tools so
+  // JlosmeScreen can show the right mode-banner text/buttons without
+  // needing to know how tracing actually works.
+  onAiTraceStatus: (status: AiTraceStatus) => void;
   baseLayer: EditorBaseLayer;
   showLidar: boolean;
   lidarOpacity: number;
@@ -93,18 +106,24 @@ function draftVertexIcon(L: Leaflet, color: string) {
   });
 }
 
+// crossOrigin is required so the AI tracing tools can read pixels back out
+// of these tiles via canvas getImageData() — without it, drawing a
+// cross-origin tile onto a canvas "taints" it and any later getImageData()
+// call throws a SecurityError. All of OSM's, Esri's and this app's own
+// lidar proxy's tile responses were confirmed (by hand, this session) to
+// send permissive CORS headers, so this doesn't change what actually loads.
 function createBaseLayer(L: Leaflet, kind: EditorBaseLayer): Leaflet {
   if (kind === "satellite") {
-    return L.tileLayer(SATELLITE_TILE_URL, { attribution: SATELLITE_ATTRIBUTION });
+    return L.tileLayer(SATELLITE_TILE_URL, { attribution: SATELLITE_ATTRIBUTION, crossOrigin: true });
   }
   if (kind === "bing" && isBingConfigured()) {
     const key = getBingMapsKey();
     const BingLayer = L.TileLayer.extend({
       getTileUrl: (coords: { x: number; y: number; z: number }) => bingTileUrl(coords.x, coords.y, coords.z, key),
     });
-    return new BingLayer("", { attribution: BING_ATTRIBUTION });
+    return new BingLayer("", { attribution: BING_ATTRIBUTION, crossOrigin: true });
   }
-  return L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION });
+  return L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION, crossOrigin: true });
 }
 
 const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(function OsmEditorMap(
@@ -117,6 +136,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     onWayFinish,
     onCreateNode,
     onNodeDragEnd,
+    onAiTraceStatus,
     baseLayer,
     showLidar,
     lidarOpacity,
@@ -128,6 +148,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   const mapInstance = useRef<Leaflet>(null);
   const elementsLayerRef = useRef<Leaflet>(null);
   const draftLayerRef = useRef<Leaflet>(null);
+  const aiDraftLayerRef = useRef<Leaflet>(null);
   const baseTileLayerRef = useRef<Leaflet>(null);
   const lidarLayerRef = useRef<Leaflet>(null);
 
@@ -143,6 +164,22 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   onCreateNodeRef.current = onCreateNode;
   const onNodeDragEndRef = useRef(onNodeDragEnd);
   onNodeDragEndRef.current = onNodeDragEnd;
+  const onAiTraceStatusRef = useRef(onAiTraceStatus);
+  onAiTraceStatusRef.current = onAiTraceStatus;
+
+  // Building tracer state: the traced closed-ring draft (lat/lon, not yet
+  // closed — the caller closes it by reusing the first node's id), plus a
+  // cache of the last captured 1024x1024 region + its MobileSAM encoder
+  // output so repeated clicks in the same area only re-run the cheap
+  // decoder. Invalidated wholesale on any pan/zoom (see the map-init
+  // effect) since a stale capture would silently show old imagery.
+  const aiBuildingDraftRef = useRef<{ points: LatLon[] } | null>(null);
+  const samCacheRef = useRef<{ capture: CapturedRegion; embedding: SamEmbedding } | null>(null);
+
+  // Road tracer state: accumulated waypoints plus the traced segment
+  // between each consecutive pair (segments, not one flat polyline, so a
+  // later waypoint's segment can be appended/retried independently).
+  const aiRoadDraftRef = useRef<{ waypoints: LatLon[]; segments: LatLon[][] } | null>(null);
 
   // Draft points for draw-boundary / new-way modes. Kept in a ref (not
   // state) since it's mutated on every map click and only ever needs to
@@ -181,7 +218,173 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     redrawDraft(L);
   }
 
-  function handleMapClick(L: Leaflet, lat: number, lon: number) {
+  // Flattens the road tracer's per-segment traces into one continuous
+  // point list, dropping each segment's duplicated leading point (the
+  // previous segment's own endpoint).
+  function flattenRoadDraft(draft: { waypoints: LatLon[]; segments: LatLon[][] }): LatLon[] {
+    if (draft.segments.length === 0) return draft.waypoints.slice(0, 1);
+    const pts: LatLon[] = [];
+    draft.segments.forEach((seg, i) => {
+      pts.push(...(i === 0 ? seg : seg.slice(1)));
+    });
+    return pts;
+  }
+
+  function redrawAiDraft(L: Leaflet) {
+    const layer = aiDraftLayerRef.current;
+    if (!layer) return;
+    layer.clearLayers();
+    const building = aiBuildingDraftRef.current;
+    if (building && building.points.length >= 3) {
+      L.polygon(
+        building.points.map((p) => [p.lat, p.lon]),
+        { color: "#e91e63", weight: 3, dashArray: "4 4", fillColor: "#e91e63", fillOpacity: 0.15 }
+      ).addTo(layer);
+      building.points.forEach((p) => {
+        L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, "#e91e63"), interactive: false }).addTo(layer);
+      });
+    }
+    const road = aiRoadDraftRef.current;
+    if (road) {
+      const flat = flattenRoadDraft(road);
+      if (flat.length >= 2) {
+        L.polyline(
+          flat.map((p) => [p.lat, p.lon]),
+          { color: "#ff6f00", weight: 3, dashArray: "4 4" }
+        ).addTo(layer);
+      }
+      road.waypoints.forEach((p) => {
+        L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, "#ff6f00"), interactive: false }).addTo(layer);
+      });
+    }
+  }
+
+  function clearAiDraft(L: Leaflet) {
+    aiBuildingDraftRef.current = null;
+    aiRoadDraftRef.current = null;
+    samCacheRef.current = null;
+    redrawAiDraft(L);
+    onAiTraceStatusRef.current({ kind: "idle" });
+  }
+
+  // Building tracer: captures a 1024x1024 region around the click (reusing
+  // the last capture/encoder output if the click falls safely inside it —
+  // see samCacheRef), runs MobileSAM's decoder for that single point, then
+  // contour-traces + simplifies the resulting mask into a draft polygon.
+  async function runBuildingTrace(L: Leaflet, map: Leaflet, latlng: { lat: number; lng: number }, containerPoint: { x: number; y: number }) {
+    // If the user cancels or switches modes while an async step below is
+    // in flight, its eventual result should be silently dropped rather
+    // than popping up a draft/status for a mode that's no longer active.
+    const stillActive = () => modeRef.current === "ai-trace-building";
+
+    onAiTraceStatusRef.current({ kind: "busy", message: "Loading AI model…" });
+    let session: MobileSamSession;
+    try {
+      session = await loadMobileSam((message) => {
+        if (stillActive()) onAiTraceStatusRef.current({ kind: "loading-model", message });
+      });
+    } catch (e) {
+      if (stillActive()) onAiTraceStatusRef.current({ kind: "error", message: e instanceof Error ? e.message : "Could not load AI model" });
+      return;
+    }
+    if (!stillActive()) return;
+
+    try {
+      const cache = samCacheRef.current;
+      const MARGIN = 90;
+      let localPt: { x: number; y: number } | null = cache ? cache.capture.latLonToPixel(latlng.lat, latlng.lng) : null;
+      const withinCache =
+        cache && localPt && localPt.x > MARGIN && localPt.y > MARGIN && localPt.x < SAM_INPUT_SIZE - MARGIN && localPt.y < SAM_INPUT_SIZE - MARGIN;
+
+      let capture: CapturedRegion;
+      let embedding: SamEmbedding;
+      if (withinCache && cache) {
+        capture = cache.capture;
+        embedding = cache.embedding;
+      } else {
+        onAiTraceStatusRef.current({ kind: "busy", message: "Capturing map imagery…" });
+        capture = captureMapRegion(map, containerPoint, SAM_INPUT_SIZE);
+        onAiTraceStatusRef.current({ kind: "busy", message: "Analyzing image…" });
+        embedding = await encodeRegion(session, capture.canvas);
+        samCacheRef.current = { capture, embedding };
+        localPt = capture.latLonToPixel(latlng.lat, latlng.lng);
+      }
+
+      onAiTraceStatusRef.current({ kind: "busy", message: "Segmenting…" });
+      const maskResult = await decodeClick(session, embedding, localPt!.x, localPt!.y);
+      if (!stillActive()) return;
+      const comp = connectedComponentAt(maskResult.mask, maskResult.width, maskResult.height, Math.round(localPt!.x), Math.round(localPt!.y));
+      if (!comp) {
+        onAiTraceStatusRef.current({ kind: "error", message: "No object found at that point — click more centrally on a building." });
+        return;
+      }
+      const boundary = traceComponentBoundary(comp, maskResult.width, maskResult.height);
+      if (!boundary || boundary.length < 5) {
+        onAiTraceStatusRef.current({ kind: "error", message: "Couldn't trace a usable outline there — try a different point." });
+        return;
+      }
+      const simplified: Pt[] = douglasPeucker(boundary, 2.5);
+      const ring = simplified.length > 1 ? simplified.slice(0, -1) : simplified; // drop the closing duplicate point
+      if (ring.length < 3) {
+        onAiTraceStatusRef.current({ kind: "error", message: "Traced outline was too small — try a different point." });
+        return;
+      }
+      aiBuildingDraftRef.current = { points: ring.map((p) => capture.pixelToLatLon(p.x, p.y)) };
+      redrawAiDraft(L);
+      onAiTraceStatusRef.current({ kind: "ready", message: `Traced outline (${ring.length} points, score ${maskResult.score.toFixed(2)}) — Accept or Discard.` });
+    } catch (e) {
+      const message =
+        e instanceof Error && e.name === "SecurityError"
+          ? "Could not read map imagery here — try the satellite or lidar layer."
+          : e instanceof Error
+            ? e.message
+            : "Tracing failed";
+      onAiTraceStatusRef.current({ kind: "error", message });
+    }
+  }
+
+  // Road tracer: each click adds a waypoint; from the second waypoint on,
+  // traces the centerline between it and the previous waypoint (fusing
+  // satellite + lidar imagery — see roadTrace.ts) and appends the result to
+  // the running draft.
+  async function runRoadWaypoint(L: Leaflet, map: Leaflet, latlng: { lat: number; lng: number }) {
+    const prevDraft = aiRoadDraftRef.current ?? { waypoints: [], segments: [] };
+    const point: LatLon = { lat: latlng.lat, lon: latlng.lng };
+    const waypoints = [...prevDraft.waypoints, point];
+
+    if (waypoints.length === 1) {
+      aiRoadDraftRef.current = { waypoints, segments: [] };
+      redrawAiDraft(L);
+      onAiTraceStatusRef.current({ kind: "idle" });
+      return;
+    }
+
+    onAiTraceStatusRef.current({ kind: "busy", message: "Tracing road segment…" });
+    const prevPoint = waypoints[waypoints.length - 2];
+    try {
+      const result = await traceRoadSegment(prevPoint, point, map.getZoom());
+      if (modeRef.current !== "ai-trace-road") return;
+      const segments = [...prevDraft.segments, result.points];
+      aiRoadDraftRef.current = { waypoints, segments };
+      redrawAiDraft(L);
+      const note = result.fellBackToStraightLine ? " (no clear imagery signal there — used a straight line)" : "";
+      onAiTraceStatusRef.current({ kind: "ready", message: `Traced ${segments.length} segment(s)${note}. Add more points or Finish.` });
+    } catch (e) {
+      if (modeRef.current !== "ai-trace-road") return;
+      // Keep the waypoint even if tracing that segment failed outright —
+      // fall back to a straight line so the draft stays usable rather than
+      // silently dropping the click.
+      const segments = [...prevDraft.segments, [prevPoint, point]];
+      aiRoadDraftRef.current = { waypoints, segments };
+      redrawAiDraft(L);
+      onAiTraceStatusRef.current({
+        kind: "error",
+        message: `${e instanceof Error ? e.message : "Segment tracing failed"} — used a straight line instead.`,
+      });
+    }
+  }
+
+  function handleMapClick(L: Leaflet, lat: number, lon: number, containerPoint: { x: number; y: number }) {
     const m = modeRef.current;
     if (m === "draw-boundary") {
       draftPoints.current = [...draftPoints.current, { lat, lon }];
@@ -191,6 +394,10 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       redrawDraft(L);
     } else if (m === "new-node") {
       onCreateNodeRef.current(lat, lon);
+    } else if (m === "ai-trace-building") {
+      runBuildingTrace(L, mapInstance.current, { lat, lng: lon }, containerPoint);
+    } else if (m === "ai-trace-road") {
+      runRoadWaypoint(L, mapInstance.current, { lat, lng: lon });
     } else {
       onSelectRef.current(null);
     }
@@ -213,12 +420,37 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       onWayFinishRef.current(
         pts.map((p) => (p.existingId !== undefined ? { existingId: p.existingId } : { lat: p.lat, lon: p.lon }))
       );
+    } else if (modeRef.current === "ai-trace-building") {
+      const draft = aiBuildingDraftRef.current;
+      if (draft && draft.points.length >= 3) {
+        onWayFinishRef.current(
+          draft.points.map((p) => ({ lat: p.lat, lon: p.lon })),
+          true
+        );
+      }
+    } else if (modeRef.current === "ai-trace-road") {
+      const draft = aiRoadDraftRef.current;
+      if (draft) {
+        const flat = flattenRoadDraft(draft);
+        if (flat.length >= 2) {
+          onWayFinishRef.current(
+            flat.map((p) => ({ lat: p.lat, lon: p.lon })),
+            false
+          );
+        }
+      }
     }
-    loadLeaflet().then((L) => clearDraft(L));
+    loadLeaflet().then((L) => {
+      clearDraft(L);
+      clearAiDraft(L);
+    });
   }
 
   function cancelDraw() {
-    loadLeaflet().then((L) => clearDraft(L));
+    loadLeaflet().then((L) => {
+      clearDraft(L);
+      clearAiDraft(L);
+    });
   }
 
   // Map init.
@@ -230,12 +462,20 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       const map = L.map(containerRef.current).setView(center, initialRegion ? 15 : 4);
       const base = createBaseLayer(L, baseLayer).addTo(map);
       baseTileLayerRef.current = base;
-      map.on("click", (e: { latlng: { lat: number; lng: number } }) => {
-        handleMapClick(L, e.latlng.lat, e.latlng.lng);
+      map.on("click", (e: { latlng: { lat: number; lng: number }; containerPoint: { x: number; y: number } }) => {
+        handleMapClick(L, e.latlng.lat, e.latlng.lng, e.containerPoint);
+      });
+      // A captured-region cache (building tracer) keyed only by "did the
+      // view change" — any pan/zoom invalidates it outright rather than
+      // trying to track exactly what's still valid, since a stale capture
+      // would otherwise silently show outdated imagery to the model.
+      map.on("movestart zoomstart", () => {
+        samCacheRef.current = null;
       });
       mapInstance.current = map;
       elementsLayerRef.current = L.layerGroup().addTo(map);
       draftLayerRef.current = L.layerGroup().addTo(map);
+      aiDraftLayerRef.current = L.layerGroup().addTo(map);
       setTimeout(() => map.invalidateSize(), 0);
     });
     return () => {
@@ -253,11 +493,16 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     loadLeaflet().then((L) => {
       const map = mapInstance.current;
       if (!map) return;
-      if (mode === "draw-boundary" || mode === "new-way") {
+      if (mode === "draw-boundary" || mode === "new-way" || mode === "ai-trace-road") {
         map.doubleClickZoom.disable();
       } else {
         map.doubleClickZoom.enable();
+      }
+      if (mode !== "draw-boundary" && mode !== "new-way") {
         clearDraft(L);
+      }
+      if (mode !== "ai-trace-building" && mode !== "ai-trace-road") {
+        clearAiDraft(L);
       }
     });
   }, [mode]);
@@ -286,6 +531,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           lidarLayerRef.current = L.tileLayer(USGS_LIDAR_TILE_URL, {
             opacity: lidarOpacity,
             attribution: USGS_LIDAR_ATTRIBUTION,
+            crossOrigin: true,
           }).addTo(map);
         }
       } else if (lidarLayerRef.current) {

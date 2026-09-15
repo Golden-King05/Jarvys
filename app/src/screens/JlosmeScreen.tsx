@@ -23,6 +23,7 @@ import { osmTargetStorage } from "../utils/osmAuth";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { isBingConfigured } from "../utils/bingImagery";
+import type { AiTraceStatus } from "../utils/aiTraceTypes";
 import {
   elementDisplayName,
   osmEditorElementKey,
@@ -55,6 +56,11 @@ export default function JlosmeScreen() {
   const [statusMessage, setStatusMessage] = useState<{ kind: "info" | "error"; text: string } | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
+  // Progress/state for the two AI-assisted tracing tools (see
+  // aiTraceTypes.ts) — OsmEditorMap.web.tsx reports into this so the mode
+  // banner can show the right text/buttons without knowing how tracing
+  // itself works.
+  const [aiTraceStatus, setAiTraceStatus] = useState<AiTraceStatus>({ kind: "idle" });
 
   useEffect(() => {
     setDeleteArmed(false);
@@ -187,7 +193,11 @@ export default function JlosmeScreen() {
     }
   }
 
-  async function handleWayFinish(points: WayDraftPoint[]) {
+  // `closeLoop`: used by the AI building tracer's closed-polygon draft —
+  // every point there is brand-new (no existingId), so the way needs its
+  // first created node's id repeated at the end to close the ring. Plain
+  // manual way-drawing never sets this.
+  async function handleWayFinish(points: WayDraftPoint[], closeLoop = false) {
     if (!token) return;
     setMode("view");
     setBusy("Creating way…");
@@ -206,6 +216,9 @@ export default function JlosmeScreen() {
           upsertElement(node);
           nodeIds.push(node.id);
         }
+      }
+      if (closeLoop && nodeIds.length >= 3) {
+        nodeIds.push(nodeIds[0]);
       }
       const way = await api.createOsmEditorElement(baseUrl, token, { type: "way", tags: {}, geometry: { nodeIds } });
       upsertElement(way);
@@ -264,7 +277,13 @@ export default function JlosmeScreen() {
   function toggleMode(next: EditorMode) {
     setMode((cur) => (cur === next ? "view" : next));
     setSelectedKey(null);
+    setAiTraceStatus({ kind: "idle" });
   }
+
+  const isAiTraceMode = mode === "ai-trace-building" || mode === "ai-trace-road";
+  const aiTraceMessage = isAiTraceMode && aiTraceStatus.kind !== "idle" ? aiTraceStatus.message : null;
+  const aiTraceBusy = isAiTraceMode && (aiTraceStatus.kind === "busy" || aiTraceStatus.kind === "loading-model");
+  const aiTraceReady = isAiTraceMode && aiTraceStatus.kind === "ready";
 
   const modeBannerText =
     mode === "draw-boundary"
@@ -273,7 +292,11 @@ export default function JlosmeScreen() {
         ? "Tap existing nodes or empty space to build a way, then Finish."
         : mode === "new-node"
           ? "Tap the map to add nodes."
-          : null;
+          : mode === "ai-trace-building"
+            ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
+            : mode === "ai-trace-road"
+              ? (aiTraceMessage ?? "Click a start point on the road, then more points along it, then Finish.")
+              : null;
 
   return (
     <View style={styles.container}>
@@ -288,6 +311,7 @@ export default function JlosmeScreen() {
           onWayFinish={handleWayFinish}
           onCreateNode={handleCreateNode}
           onNodeDragEnd={handleNodeDragEnd}
+          onAiTraceStatus={setAiTraceStatus}
           baseLayer={baseLayer}
           showLidar={showLidar}
           lidarOpacity={lidarOpacity}
@@ -303,18 +327,24 @@ export default function JlosmeScreen() {
           <View style={styles.modeBanner}>
             <Text style={styles.modeBannerText}>{modeBannerText}</Text>
             <View style={styles.modeBannerButtons}>
-              {mode !== "new-node" ? (
-                <TouchableOpacity onPress={() => mapRef.current?.finishDraw()}>
-                  <Text style={styles.modeBannerFinish}>Finish</Text>
+              {mode !== "new-node" && !aiTraceBusy ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    mapRef.current?.finishDraw();
+                    if (isAiTraceMode) setAiTraceStatus({ kind: "idle" });
+                  }}
+                >
+                  <Text style={styles.modeBannerFinish}>{aiTraceReady ? "Accept" : "Finish"}</Text>
                 </TouchableOpacity>
               ) : null}
               <TouchableOpacity
                 onPress={() => {
                   mapRef.current?.cancelDraw();
                   setMode("view");
+                  setAiTraceStatus({ kind: "idle" });
                 }}
               >
-                <Text style={styles.modeBannerCancel}>{mode === "new-node" ? "Done" : "Cancel"}</Text>
+                <Text style={styles.modeBannerCancel}>{mode === "new-node" ? "Done" : aiTraceReady ? "Discard" : "Cancel"}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -369,6 +399,25 @@ export default function JlosmeScreen() {
           >
             <Text style={styles.toolbarButtonText}>New way</Text>
           </TouchableOpacity>
+          {/* AI-assisted tracing — web only (Leaflet + onnxruntime-web +
+              canvas pixel access), same web/native asymmetry as the native
+              hint below for freeform way drawing. */}
+          {Platform.OS === "web" ? (
+            <TouchableOpacity
+              style={[styles.toolbarButton, mode === "ai-trace-building" && styles.toolbarButtonActive]}
+              onPress={() => toggleMode("ai-trace-building")}
+            >
+              <Text style={styles.toolbarButtonText}>AI trace: building</Text>
+            </TouchableOpacity>
+          ) : null}
+          {Platform.OS === "web" ? (
+            <TouchableOpacity
+              style={[styles.toolbarButton, mode === "ai-trace-road" && styles.toolbarButtonActive]}
+              onPress={() => toggleMode("ai-trace-road")}
+            >
+              <Text style={styles.toolbarButtonText}>AI trace: road</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.toolbarButton} onPress={() => setShowRelations(true)}>
             <Text style={styles.toolbarButtonText}>Relations ({relations.length})</Text>
           </TouchableOpacity>
