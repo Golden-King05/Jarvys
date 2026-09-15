@@ -59,6 +59,7 @@ export default function JlosmeScreen() {
   const [statusMessage, setStatusMessage] = useState<{ kind: "info" | "error"; text: string } | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
   // Progress/state for the two AI-assisted tracing tools (see
   // aiTraceTypes.ts) — OsmEditorMap.web.tsx reports into this so the mode
   // banner can show the right text/buttons without knowing how tracing
@@ -480,33 +481,55 @@ export default function JlosmeScreen() {
           <TouchableOpacity style={styles.toolbarButton} onPress={() => setShowRelations(true)}>
             <Text style={styles.toolbarButtonText}>Relations ({relations.length})</Text>
           </TouchableOpacity>
-          {/* Square selection (JOSM's Orthogonalize) — snaps the selected
-              way's corners to right angles. Hold rather than tap, so a
-              stray touch doesn't reshape a building; Ctrl+Q does the same
-              thing on web/desktop (see the keydown listener above). */}
+          {/* Square selection and Clear data both live under this gear menu
+              rather than as their own toolbar buttons — less-used/riskier
+              actions tucked behind one tap instead of crowding the row. */}
           <TouchableOpacity
-            style={[styles.toolbarButton, !selectedElement || selectedElement.type !== "way" ? styles.toolbarButtonDisabled : null]}
-            onPress={() => setStatusMessage({ kind: "info", text: "Hold this button to square the selected way (or press Ctrl+Q)." })}
-            onLongPress={handleSquareSelection}
-            delayLongPress={500}
+            style={[styles.toolbarButton, showToolsMenu && styles.toolbarButtonActive]}
+            onPress={() => setShowToolsMenu((v) => !v)}
           >
-            <Text style={styles.toolbarButtonText}>⚙️ Square</Text>
-          </TouchableOpacity>
-          {/* Same clear-the-working-set action already in the imagery panel
-              (🗺️) — also here in the main toolbar since that's the more
-              obvious place to look for it. Shares clearArmed/
-              handleClearWorkingSet so either button's confirm step covers
-              the other too. */}
-          <TouchableOpacity
-            style={[styles.toolbarButton, clearArmed && styles.toolbarButtonDanger]}
-            onPress={() => (clearArmed ? handleClearWorkingSet() : setClearArmed(true))}
-            onBlur={() => setClearArmed(false)}
-          >
-            <Text style={[styles.toolbarButtonText, clearArmed && styles.toolbarButtonDangerText]}>
-              {clearArmed ? "Tap again to confirm" : "🗑️ Clear data"}
-            </Text>
+            <Text style={[styles.toolbarButtonText, showToolsMenu && styles.toolbarButtonTextActive]}>⚙️</Text>
           </TouchableOpacity>
         </View>
+
+        {showToolsMenu ? (
+          <View style={styles.toolsMenu}>
+            {/* Square selection (JOSM's Orthogonalize) — snaps the selected
+                way's corners to right angles. Hold rather than tap, so a
+                stray touch doesn't reshape a building; Ctrl+Q does the same
+                thing on web/desktop (see the keydown listener above). */}
+            <TouchableOpacity
+              style={[styles.toolsMenuItem, (!selectedElement || selectedElement.type !== "way") && styles.toolbarButtonDisabled]}
+              onPress={() => setStatusMessage({ kind: "info", text: "Hold this row to square the selected way (or press Ctrl+Q)." })}
+              onLongPress={() => {
+                handleSquareSelection();
+                setShowToolsMenu(false);
+              }}
+              delayLongPress={500}
+            >
+              <Text style={styles.toolsMenuItemText}>Square selection (hold)</Text>
+            </TouchableOpacity>
+            {/* Same clear-the-working-set action as the imagery panel's
+                (🗺️) own copy — shares clearArmed/handleClearWorkingSet so
+                either one's confirm step covers the other too. */}
+            <TouchableOpacity
+              style={styles.toolsMenuItem}
+              onPress={() => {
+                if (clearArmed) {
+                  handleClearWorkingSet();
+                  setShowToolsMenu(false);
+                } else {
+                  setClearArmed(true);
+                }
+              }}
+              onBlur={() => setClearArmed(false)}
+            >
+              <Text style={[styles.toolsMenuItemText, clearArmed && styles.toolbarButtonDangerText]}>
+                {clearArmed ? "Tap again to confirm" : "🗑️ Clear data"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         <TouchableOpacity style={styles.imageryButton} onPress={() => setShowImagery(true)}>
           <Text style={styles.imageryButtonText}>🗺️</Text>
@@ -816,9 +839,22 @@ const styles = StyleSheet.create({
   toolbarButton: { backgroundColor: "#f0f0f0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   toolbarButtonActive: { backgroundColor: "#2980b9" },
   toolbarButtonDisabled: { opacity: 0.5 },
-  toolbarButtonDanger: { backgroundColor: "#fdecea" },
   toolbarButtonDangerText: { color: "#c0392b" },
   toolbarButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#333" },
+  toolbarButtonTextActive: { color: "#fff" },
+  toolsMenu: {
+    position: "absolute",
+    right: 12,
+    bottom: 68, // clears the toolbar's own height, opens upward from the gear button
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 4,
+    minWidth: 190,
+    elevation: 6,
+    zIndex: 1001,
+  },
+  toolsMenuItem: { paddingHorizontal: 14, paddingVertical: 10 },
+  toolsMenuItemText: { fontFamily: fonts.medium, fontSize: 13, color: "#333" },
   imageryButton: {
     position: "absolute",
     right: 16,
