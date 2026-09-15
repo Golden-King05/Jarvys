@@ -54,6 +54,7 @@ interface OsmEditorMapProps {
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
   baseLayer: EditorBaseLayer;
   showLidar: boolean;
+  lidarOpacity: number;
   initialRegion?: { latitude: number; longitude: number };
 }
 
@@ -118,6 +119,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     onNodeDragEnd,
     baseLayer,
     showLidar,
+    lidarOpacity,
     initialRegion,
   },
   ref
@@ -282,7 +284,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       if (showLidar) {
         if (!lidarLayerRef.current) {
           lidarLayerRef.current = L.tileLayer(USGS_LIDAR_TILE_URL, {
-            opacity: 0.7,
+            opacity: lidarOpacity,
             attribution: USGS_LIDAR_ATTRIBUTION,
           }).addTo(map);
         }
@@ -292,6 +294,13 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       }
     });
   }, [showLidar]);
+
+  // Separate from the effect above (same reasoning as MapCanvas.web.tsx's
+  // main-map lidar layer) so dragging the slider adjusts the existing
+  // layer's opacity instead of removing and re-adding it.
+  useEffect(() => {
+    lidarLayerRef.current?.setOpacity(lidarOpacity);
+  }, [lidarOpacity]);
 
   // Renders every node/way in the working set. Relations aren't drawn (per
   // scope — a relation's constituent ways already render with normal way

@@ -35,8 +35,9 @@ const MAX_BBOX_DEGREES = 0.08;
 // A hard cap on how many elements one download will keep, purely so a
 // pathological area (or a mirror returning more than expected) can't hand
 // back an unbounded response — truncation is flagged to the caller rather
-// than silently dropped.
-const MAX_ELEMENTS = 8000;
+// than silently dropped. Exported so the direct-API download path
+// (osmEditorMapApi.ts) applies the same defensive cap.
+export const MAX_ELEMENTS = 8000;
 
 export type OsmElementType = "node" | "way" | "relation";
 

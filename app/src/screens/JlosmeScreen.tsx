@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
+import Slider from "@react-native-community/slider";
 import OsmEditorMap, {
   type EditorBaseLayer,
   type EditorMode,
@@ -9,7 +10,16 @@ import OsmEditorMap, {
 import RelationEditor from "../components/RelationEditor";
 import OsmUploadPanel from "../components/OsmUploadPanel";
 import TagsEditor from "../components/TagsEditor";
-import { api, CancelledError, type OsmEditorElement, type OsmEditorGeometry, type OsmElementType, type TagDefinition } from "../api";
+import {
+  api,
+  CancelledError,
+  type OsmEditorElement,
+  type OsmEditorGeometry,
+  type OsmElementType,
+  type OsmUploadTarget,
+  type TagDefinition,
+} from "../api";
+import { osmTargetStorage } from "../utils/osmAuth";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { isBingConfigured } from "../utils/bingImagery";
@@ -35,6 +45,7 @@ export default function JlosmeScreen() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [baseLayer, setBaseLayer] = useState<EditorBaseLayer>("osm");
   const [showLidar, setShowLidar] = useState(false);
+  const [lidarOpacity, setLidarOpacity] = useState(0.7);
   const [showImagery, setShowImagery] = useState(false);
   const [showRelations, setShowRelations] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
@@ -126,7 +137,14 @@ export default function JlosmeScreen() {
     // from nothing moving on screen at all.
     const tick = setInterval(() => setDownloadElapsedMs(Date.now() - startedAt), 500);
     try {
-      const result = await api.downloadOsmEditorArea(baseUrl, token, area, controller.signal);
+      // Read (not just write) has to match whichever target the upload
+      // panel has selected — sandbox and production are separate
+      // databases with disjoint element ids/versions, so editing data
+      // pulled from one and uploading it to the other would fail on every
+      // modify/delete the moment it wasn't a brand-new local creation.
+      const storedTarget = await osmTargetStorage.get();
+      const target: OsmUploadTarget = storedTarget === "production" ? "production" : "sandbox";
+      const result = await api.downloadOsmEditorArea(baseUrl, token, area, target, controller.signal);
       setElements(result.elements);
       setStatusMessage({
         kind: "info",
@@ -272,6 +290,7 @@ export default function JlosmeScreen() {
           onNodeDragEnd={handleNodeDragEnd}
           baseLayer={baseLayer}
           showLidar={showLidar}
+          lidarOpacity={lidarOpacity}
         />
 
         {loading ? (
@@ -517,6 +536,19 @@ export default function JlosmeScreen() {
               <Text style={styles.imageryLabel}>Lidar hillshade overlay</Text>
               <Switch value={showLidar} onValueChange={setShowLidar} />
             </View>
+            {showLidar ? (
+              <View style={styles.lidarOpacityRow}>
+                <Text style={styles.imageryHint}>Opacity</Text>
+                <Slider
+                  style={styles.lidarOpacitySlider}
+                  minimumValue={0.1}
+                  maximumValue={1}
+                  value={lidarOpacity}
+                  onValueChange={setLidarOpacity}
+                  minimumTrackTintColor="#2980b9"
+                />
+              </View>
+            ) : null}
 
             <TouchableOpacity
               style={[styles.clearButton, clearArmed && styles.clearButtonArmed]}
@@ -734,6 +766,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 4,
   },
+  lidarOpacityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  lidarOpacitySlider: { flex: 1, height: 32 },
   clearButton: {
     marginHorizontal: 16,
     marginVertical: 16,

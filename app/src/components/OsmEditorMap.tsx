@@ -35,6 +35,7 @@ interface OsmEditorMapProps {
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
   baseLayer: EditorBaseLayer;
   showLidar: boolean;
+  lidarOpacity: number;
   initialRegion?: { latitude: number; longitude: number };
 }
 
@@ -72,6 +73,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     onNodeDragEnd,
     baseLayer,
     showLidar,
+    lidarOpacity,
     initialRegion,
   },
   ref
@@ -146,7 +148,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       initialRegion={initialRegion ? { ...initialRegion, latitudeDelta: 0.05, longitudeDelta: 0.05 } : DEFAULT_REGION}
       onPress={(e) => handleMapPress(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
     >
-      {showLidar ? <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={0.7} /> : null}
+      {showLidar ? <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={lidarOpacity} /> : null}
 
       {elements
         .filter((el) => el.type === "way")

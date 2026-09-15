@@ -17,6 +17,7 @@ import {
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { checkAreaSize, downloadOsmEditorArea, type OsmEditorArea } from "../osmEditorOverpass.js";
+import { downloadOsmMapApi } from "../osmEditorMapApi.js";
 import { getOsmTagDefinitions } from "../osmTagDefinitions.js";
 import {
   buildOsmChangeXml,
@@ -73,12 +74,26 @@ const polygonAreaSchema = z.object({
   points: z.array(pointSchema).min(3).max(500),
 });
 const areaSchema = z.union([bboxAreaSchema, polygonAreaSchema]);
+const downloadTargetSchema = z.enum(["sandbox", "production"]).default("sandbox");
 
-// Downloads real OSM data inside a drawn boundary (or a plain bbox) via
-// Overpass and merges it into the user's working set — called again with a
-// different area to "expand selection" (the merge itself, in
+// Downloads real OSM data inside a drawn boundary (or a plain bbox) and
+// merges it into the user's working set — called again with a different
+// area to "expand selection" (the merge itself, in
 // upsertDownloadedOsmElements, is what makes that safe: it never disturbs
 // an element already being edited).
+//
+// A plain bbox (the common case) goes straight to the OSM API's own
+// /api/0.6/map endpoint for the SAME target the user has selected for
+// uploading — the same thing JOSM's default "Download" does, and
+// dramatically faster/more reliable than Overpass for this shape of
+// request (see osmEditorMapApi.ts). It's also the only source that's
+// actually valid to edit-and-upload against the sandbox: Overpass only
+// ever mirrors production, so data downloaded from it would never match
+// ids/versions in the separate sandbox database and every modify/delete
+// would fail on upload there. A freeform polygon boundary, though, isn't
+// something the /map endpoint can express at all (bbox-only) — that still
+// needs Overpass, which means polygon drawing only works when the upload
+// target is production.
 osmEditorRouter.post(
   "/download",
   asyncHandler(async (req: AuthedRequest, res) => {
@@ -86,12 +101,34 @@ osmEditorRouter.post(
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid area" });
     }
+    const targetParsed = downloadTargetSchema.safeParse(req.body?.target);
+    if (!targetParsed.success) {
+      return res.status(400).json({ error: "Invalid target" });
+    }
     const area = parsed.data as OsmEditorArea;
+    const target = targetParsed.data;
     const sizeCheck = checkAreaSize(area);
     if ("error" in sizeCheck) {
       return res.status(400).json({ error: sizeCheck.error });
     }
-    const result = await downloadOsmEditorArea(area);
+
+    let result: Awaited<ReturnType<typeof downloadOsmEditorArea>>;
+    if (area.kind === "bbox") {
+      result = await downloadOsmMapApi(target, area);
+      if ("error" in result && target === "production") {
+        // The direct API had a hiccup — Overpass is a valid fallback only
+        // for production, since it's the only database it mirrors.
+        result = await downloadOsmEditorArea(area);
+      }
+    } else if (target === "production") {
+      result = await downloadOsmEditorArea(area);
+    } else {
+      return res.status(400).json({
+        error:
+          "Freeform polygon downloads aren't available against the sandbox (Overpass doesn't mirror it) — draw a rectangle instead, or switch the upload target to production.",
+      });
+    }
+
     if ("error" in result) {
       return res.status(502).json({ error: result.error });
     }

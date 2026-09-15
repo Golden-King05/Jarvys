@@ -473,11 +473,17 @@ export const api = {
   // merges it into the working set — call again with a new area to "expand
   // selection"; the server-side merge never disturbs an element already
   // being edited. Returns the full merged working set.
-  downloadOsmEditorArea: (baseUrl: string, token: string, area: OsmEditorArea, signal?: AbortSignal) =>
+  downloadOsmEditorArea: (
+    baseUrl: string,
+    token: string,
+    area: OsmEditorArea,
+    target: OsmUploadTarget,
+    signal?: AbortSignal
+  ) =>
     request<{ elements: OsmEditorElement[]; downloadedCount: number; truncated: boolean }>(
       baseUrl,
       "/osm-editor/download",
-      { method: "POST", token, body: { area }, signal }
+      { method: "POST", token, body: { area, target }, signal }
     ),
 
   createOsmEditorElement: (
