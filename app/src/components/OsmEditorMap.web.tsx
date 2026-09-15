@@ -9,7 +9,7 @@ import type { AiTraceStatus } from "../utils/aiTraceTypes";
 import { captureMapRegion, type CapturedRegion } from "../utils/mapCapture";
 import { decodeClick, encodeRegion, loadMobileSam, SAM_INPUT_SIZE, type MobileSamSession, type SamEmbedding } from "../utils/mobileSam";
 import { connectedComponentAt, douglasPeucker, traceComponentBoundary, type Pt } from "../utils/traceGeometry";
-import { traceRoadSegment, type LatLon } from "../utils/roadTrace";
+import { traceRoadSegment, traceStreamSegment, type LatLon } from "../utils/roadTrace";
 
 // Same runtime-loaded Leaflet (CDN, no npm package) as MapCanvas.web.tsx —
 // reuses that exact loader rather than a second copy of the load logic.
@@ -39,7 +39,14 @@ function loadLeaflet(): Promise<Leaflet> {
   return leafletLoadPromise;
 }
 
-export type EditorMode = "view" | "draw-boundary" | "new-node" | "new-way" | "ai-trace-building" | "ai-trace-road";
+export type EditorMode =
+  | "view"
+  | "draw-boundary"
+  | "new-node"
+  | "new-way"
+  | "ai-trace-building"
+  | "ai-trace-road"
+  | "ai-trace-stream";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
 // One vertex picked while drawing a new way — either a reference to an
@@ -267,15 +274,16 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     }
     const road = aiRoadDraftRef.current;
     if (road) {
+      const lineColor = modeRef.current === "ai-trace-stream" ? "#1e88e5" : "#ff6f00";
       const flat = flattenRoadDraft(road);
       if (flat.length >= 2) {
         L.polyline(
           flat.map((p) => [p.lat, p.lon]),
-          { color: "#ff6f00", weight: 3, dashArray: "4 4" }
+          { color: lineColor, weight: 3, dashArray: "4 4" }
         ).addTo(layer);
       }
       road.waypoints.forEach((p) => {
-        L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, "#ff6f00"), interactive: false }).addTo(layer);
+        L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, lineColor), interactive: false }).addTo(layer);
       });
     }
   }
@@ -364,14 +372,23 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     }
   }
 
-  // Road tracer: each click adds a waypoint; from the second waypoint on,
-  // traces the centerline between it and the previous waypoint (fusing
-  // satellite + lidar imagery — see roadTrace.ts) and appends the result to
-  // the running draft.
-  async function runRoadWaypoint(L: Leaflet, map: Leaflet, latlng: { lat: number; lng: number }) {
+  // Linear-feature tracer shared by both road and stream modes: each click
+  // adds a waypoint; from the second waypoint on, traces the centerline
+  // between it and the previous waypoint and appends the result to the
+  // running draft. Only the imagery source (and therefore which function
+  // from roadTrace.ts gets called) differs between the two — see
+  // traceRoadSegment/traceStreamSegment.
+  async function runLineWaypoint(
+    L: Leaflet,
+    map: Leaflet,
+    latlng: { lat: number; lng: number },
+    lineMode: "ai-trace-road" | "ai-trace-stream"
+  ) {
     const prevDraft = aiRoadDraftRef.current ?? { waypoints: [], segments: [] };
     const point: LatLon = { lat: latlng.lat, lon: latlng.lng };
     const waypoints = [...prevDraft.waypoints, point];
+    const traceSegment = lineMode === "ai-trace-stream" ? traceStreamSegment : traceRoadSegment;
+    const noun = lineMode === "ai-trace-stream" ? "stream" : "road";
 
     if (waypoints.length === 1) {
       aiRoadDraftRef.current = { waypoints, segments: [] };
@@ -380,18 +397,18 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       return;
     }
 
-    onAiTraceStatusRef.current({ kind: "busy", message: "Tracing road segment…" });
+    onAiTraceStatusRef.current({ kind: "busy", message: `Tracing ${noun} segment…` });
     const prevPoint = waypoints[waypoints.length - 2];
     try {
-      const result = await traceRoadSegment(prevPoint, point, map.getZoom());
-      if (modeRef.current !== "ai-trace-road") return;
+      const result = await traceSegment(prevPoint, point, map.getZoom());
+      if (modeRef.current !== lineMode) return;
       const segments = [...prevDraft.segments, result.points];
       aiRoadDraftRef.current = { waypoints, segments };
       redrawAiDraft(L);
       const note = result.fellBackToStraightLine ? " (no clear imagery signal there — used a straight line)" : "";
       onAiTraceStatusRef.current({ kind: "ready", message: `Traced ${segments.length} segment(s)${note}. Add more points or Finish.` });
     } catch (e) {
-      if (modeRef.current !== "ai-trace-road") return;
+      if (modeRef.current !== lineMode) return;
       // Keep the waypoint even if tracing that segment failed outright —
       // fall back to a straight line so the draft stays usable rather than
       // silently dropping the click.
@@ -417,8 +434,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       onCreateNodeRef.current(lat, lon);
     } else if (m === "ai-trace-building") {
       runBuildingTrace(L, mapInstance.current, { lat, lng: lon }, containerPoint);
-    } else if (m === "ai-trace-road") {
-      runRoadWaypoint(L, mapInstance.current, { lat, lng: lon });
+    } else if (m === "ai-trace-road" || m === "ai-trace-stream") {
+      runLineWaypoint(L, mapInstance.current, { lat, lng: lon }, m);
     } else {
       onSelectRef.current(null);
     }
@@ -449,7 +466,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           true
         );
       }
-    } else if (modeRef.current === "ai-trace-road") {
+    } else if (modeRef.current === "ai-trace-road" || modeRef.current === "ai-trace-stream") {
       const draft = aiRoadDraftRef.current;
       if (draft) {
         const flat = flattenRoadDraft(draft);
@@ -514,7 +531,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     loadLeaflet().then((L) => {
       const map = mapInstance.current;
       if (!map) return;
-      if (mode === "draw-boundary" || mode === "new-way" || mode === "ai-trace-road") {
+      if (mode === "draw-boundary" || mode === "new-way" || mode === "ai-trace-road" || mode === "ai-trace-stream") {
         map.doubleClickZoom.disable();
       } else {
         map.doubleClickZoom.enable();
@@ -522,7 +539,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       if (mode !== "draw-boundary" && mode !== "new-way") {
         clearDraft(L);
       }
-      if (mode !== "ai-trace-building" && mode !== "ai-trace-road") {
+      if (mode !== "ai-trace-building" && mode !== "ai-trace-road" && mode !== "ai-trace-stream") {
         clearAiDraft(L);
       }
     });

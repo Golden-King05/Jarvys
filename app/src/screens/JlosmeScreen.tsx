@@ -340,7 +340,7 @@ export default function JlosmeScreen() {
     setAiTraceStatus({ kind: "idle" });
   }
 
-  const isAiTraceMode = mode === "ai-trace-building" || mode === "ai-trace-road";
+  const isAiTraceMode = mode === "ai-trace-building" || mode === "ai-trace-road" || mode === "ai-trace-stream";
   const aiTraceMessage = isAiTraceMode && aiTraceStatus.kind !== "idle" ? aiTraceStatus.message : null;
   const aiTraceBusy = isAiTraceMode && (aiTraceStatus.kind === "busy" || aiTraceStatus.kind === "loading-model");
   const aiTraceReady = isAiTraceMode && aiTraceStatus.kind === "ready";
@@ -356,7 +356,9 @@ export default function JlosmeScreen() {
             ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
             : mode === "ai-trace-road"
               ? (aiTraceMessage ?? "Click a start point on the road, then more points along it, then Finish.")
-              : null;
+              : mode === "ai-trace-stream"
+                ? (aiTraceMessage ?? "Click a start point on the stream, then more points along it, then Finish. Uses lidar only — satellite can't see through tree canopy.")
+                : null;
 
   return (
     <View style={styles.container}>
@@ -476,6 +478,19 @@ export default function JlosmeScreen() {
               onPress={() => toggleMode("ai-trace-road")}
             >
               <Text style={styles.toolbarButtonText}>AI trace: road</Text>
+            </TouchableOpacity>
+          ) : null}
+          {/* Same tracer as "AI trace: road" but lidar-only — most stream
+              channels are under tree canopy, invisible to satellite
+              imagery (worse, canopy texture actively misleads the edge
+              detector there), while lidar sees the drainage relief
+              regardless of tree cover. See roadTrace.ts's TraceSources. */}
+          {Platform.OS === "web" ? (
+            <TouchableOpacity
+              style={[styles.toolbarButton, mode === "ai-trace-stream" && styles.toolbarButtonActive]}
+              onPress={() => toggleMode("ai-trace-stream")}
+            >
+              <Text style={styles.toolbarButtonText}>AI trace: stream</Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity style={styles.toolbarButton} onPress={() => setShowRelations(true)}>

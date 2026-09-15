@@ -273,12 +273,26 @@ export interface RoadTraceResult {
   fellBackToStraightLine: boolean;
 }
 
-// Traces a plausible road/path centerline between two waypoints. Always
-// returns a usable polyline segment — if pathfinding can't find a corridor
-// route (e.g. both imagery sources had no usable data), it falls back to a
-// straight line between the two points rather than failing the whole
-// multi-waypoint draft, and says so via `fellBackToStraightLine`.
-export async function traceRoadSegment(start: LatLon, end: LatLon, preferredZoom: number): Promise<RoadTraceResult> {
+// Which imagery sources to pull for a trace. Roads use both (satellite's
+// pavement contrast is usually reliable in the open). Streams default to
+// lidar only — most stream channels sit under tree canopy, where satellite
+// imagery shows a wall of leaf/shadow texture instead of the water: real
+// edges there (Sobel doesn't know the difference), which would pollute the
+// fused cost surface with noise rather than correctly contributing nothing
+// the way a blank/failed tile does. Bare-earth lidar sees the drainage
+// relief through the canopy regardless, so it alone is the reliable signal
+// for this case.
+export interface TraceSources {
+  satellite: boolean;
+  lidar: boolean;
+}
+
+async function traceLinearFeature(
+  start: LatLon,
+  end: LatLon,
+  preferredZoom: number,
+  sources: TraceSources
+): Promise<RoadTraceResult> {
   const bounds = padBounds(start, end);
   let zoom = Math.round(preferredZoom);
   let grid: TileGrid = computeTileGrid(bounds, zoom);
@@ -288,14 +302,15 @@ export async function traceRoadSegment(start: LatLon, end: LatLon, preferredZoom
   }
 
   const [satelliteMosaic, lidarMosaic] = await Promise.all([
-    fetchTileMosaic(SATELLITE_TILE_URL, grid).catch(() => null),
-    fetchTileMosaic(USGS_LIDAR_TILE_URL, grid).catch(() => null),
+    sources.satellite ? fetchTileMosaic(SATELLITE_TILE_URL, grid).catch(() => null) : Promise.resolve(null),
+    sources.lidar ? fetchTileMosaic(USGS_LIDAR_TILE_URL, grid).catch(() => null) : Promise.resolve(null),
   ]);
 
   const satelliteOk = !!satelliteMosaic && satelliteMosaic.loadedTileCount > 0;
   const lidarOk = !!lidarMosaic && lidarMosaic.loadedTileCount > 0;
   if (!satelliteOk && !lidarOk) {
-    throw new Error("Could not load satellite or lidar imagery for this area");
+    const wanted = [sources.satellite && "satellite", sources.lidar && "lidar"].filter(Boolean).join(" or ");
+    throw new Error(`Could not load ${wanted} imagery for this area`);
   }
 
   const avgLat = (start.lat + end.lat) / 2;
@@ -326,4 +341,21 @@ export async function traceRoadSegment(start: LatLon, end: LatLon, preferredZoom
   points[0] = start;
   points[points.length - 1] = end;
   return { points, sourcesUsed, fellBackToStraightLine: false };
+}
+
+// Traces a plausible road centerline between two waypoints, fusing both
+// satellite and lidar. Always returns a usable polyline segment — if
+// pathfinding can't find a corridor route (e.g. both sources had no usable
+// data), it falls back to a straight line rather than failing the whole
+// multi-waypoint draft, and says so via `fellBackToStraightLine`.
+export function traceRoadSegment(start: LatLon, end: LatLon, preferredZoom: number): Promise<RoadTraceResult> {
+  return traceLinearFeature(start, end, preferredZoom, { satellite: true, lidar: true });
+}
+
+// Same tracer, but lidar-only — see TraceSources' comment for why: a
+// stream under forest canopy is invisible to satellite imagery (worse,
+// canopy texture actively misleads the edge detector), while lidar's
+// bare-earth model sees the drainage channel regardless of tree cover.
+export function traceStreamSegment(start: LatLon, end: LatLon, preferredZoom: number): Promise<RoadTraceResult> {
+  return traceLinearFeature(start, end, preferredZoom, { satellite: false, lidar: true });
 }
