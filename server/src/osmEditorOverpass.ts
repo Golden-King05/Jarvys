@@ -139,33 +139,60 @@ function toDownloadedElement(e: OverpassMetaElement): DownloadedOsmElement | nul
 // set, and lets them edit. Confirmed by hand against overpass.kumi.systems:
 // a small area returned 518 nodes/66 ways/4 relations with full
 // version/changeset/user/uid/timestamp/tags/nodes/members fields in ~5s.
+// Races all mirrors at once rather than trying them one after another —
+// sequential fallback meant a slow-but-eventually-working first mirror made
+// every download pay its full timeout before even trying the next one
+// (worst case, the sum of all three timeouts: ~100s+, which felt like a
+// frozen screen and could even outlast the client's own 55s request
+// timeout and surface as a hard failure). Racing bounds the wait to
+// whichever mirror answers first, so a slow/overloaded one no longer taxes
+// requests that a healthy mirror could've served quickly.
+async function fetchFromFastestMirror(query: string): Promise<OverpassMetaResponse> {
+  const controllers = OVERPASS_URLS.map(() => new AbortController());
+  const attempts = OVERPASS_URLS.map((url, i) => {
+    const controller = controllers[i];
+    const timer = setTimeout(() => controller.abort(), OVERPASS_TIMEOUT_MS);
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": USER_AGENT },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${url} (${res.status})`);
+        return (await res.json()) as OverpassMetaResponse;
+      })
+      .catch((err) => {
+        throw new Error(`${url}: ${err instanceof Error ? err.message : "network error"}`);
+      })
+      .finally(() => clearTimeout(timer));
+  });
+
+  try {
+    return await Promise.any(attempts);
+  } catch (aggregate) {
+    const messages =
+      aggregate instanceof AggregateError
+        ? aggregate.errors.map((e) => (e instanceof Error ? e.message : String(e)))
+        : [aggregate instanceof Error ? aggregate.message : String(aggregate)];
+    throw new Error(messages.join("; "));
+  } finally {
+    // A winner (or an all-round failure) means every other attempt is now
+    // pointless — stop tying up mirrors that other users' requests need.
+    for (const controller of controllers) controller.abort();
+  }
+}
+
 export async function downloadOsmEditorArea(
   area: OsmEditorArea
 ): Promise<{ elements: DownloadedOsmElement[]; truncated: boolean } | { error: string }> {
   const query = buildQuery(area);
 
-  let data: OverpassMetaResponse | null = null;
-  const errors: string[] = [];
-  for (const url of OVERPASS_URLS) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": USER_AGENT },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(OVERPASS_TIMEOUT_MS),
-      });
-      if (!res.ok) {
-        errors.push(`${url} (${res.status})`);
-        continue;
-      }
-      data = (await res.json()) as OverpassMetaResponse;
-      break;
-    } catch (err) {
-      errors.push(`${url}: ${err instanceof Error ? err.message : "network error"}`);
-    }
-  }
-  if (!data) {
-    return { error: `OpenStreetMap download failed: ${errors.join("; ")}` };
+  let data: OverpassMetaResponse;
+  try {
+    data = await fetchFromFastestMirror(query);
+  } catch (err) {
+    return { error: `OpenStreetMap download failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 
   // The query's own shape (`out meta; >; out meta;`) legitimately returns

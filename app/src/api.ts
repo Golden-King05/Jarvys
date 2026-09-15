@@ -268,13 +268,23 @@ export type ImportPointResult = { needsLocation: true; name: string } | { needsL
 // network drop (fetch throws a TypeError with no HTTP response at all).
 const REQUEST_TIMEOUT_MS = 55000;
 
+// A caller-supplied signal (e.g. a Cancel button) aborts the same way a
+// timeout does, but should surface as a quiet cancellation rather than an
+// error banner — callers check `ApiError.cancelled` to tell the two apart.
+export class CancelledError extends ApiError {
+  cancelled = true as const;
+}
+
 async function request<T>(
   baseUrl: string,
   path: string,
-  options: { method?: string; token?: string; body?: unknown } = {}
+  options: { method?: string; token?: string; body?: unknown; signal?: AbortSignal } = {}
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const externalSignal = options.signal;
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener("abort", onExternalAbort);
 
   let res: Response;
   try {
@@ -289,11 +299,15 @@ async function request<T>(
     });
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
+      if (externalSignal?.aborted) {
+        throw new CancelledError("Cancelled.");
+      }
       throw new ApiError("The server is taking a while to respond (it may be waking up) — please try again.");
     }
     throw new ApiError("Couldn't reach the server — check your connection and try again.");
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
 
   const data = await res.json().catch(() => ({}));
@@ -459,11 +473,11 @@ export const api = {
   // merges it into the working set — call again with a new area to "expand
   // selection"; the server-side merge never disturbs an element already
   // being edited. Returns the full merged working set.
-  downloadOsmEditorArea: (baseUrl: string, token: string, area: OsmEditorArea) =>
+  downloadOsmEditorArea: (baseUrl: string, token: string, area: OsmEditorArea, signal?: AbortSignal) =>
     request<{ elements: OsmEditorElement[]; downloadedCount: number; truncated: boolean }>(
       baseUrl,
       "/osm-editor/download",
-      { method: "POST", token, body: { area } }
+      { method: "POST", token, body: { area }, signal }
     ),
 
   createOsmEditorElement: (

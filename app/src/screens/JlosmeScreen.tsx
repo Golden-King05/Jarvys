@@ -9,7 +9,7 @@ import OsmEditorMap, {
 import RelationEditor from "../components/RelationEditor";
 import OsmUploadPanel from "../components/OsmUploadPanel";
 import TagsEditor from "../components/TagsEditor";
-import { api, type OsmEditorElement, type OsmEditorGeometry, type OsmElementType, type TagDefinition } from "../api";
+import { api, CancelledError, type OsmEditorElement, type OsmEditorGeometry, type OsmElementType, type TagDefinition } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { isBingConfigured } from "../utils/bingImagery";
@@ -39,6 +39,8 @@ export default function JlosmeScreen() {
   const [showRelations, setShowRelations] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // a short label while an async action is in flight
+  const [downloadElapsedMs, setDownloadElapsedMs] = useState(0);
+  const downloadAbortRef = useRef<AbortController | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ kind: "info" | "error"; text: string } | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
@@ -111,10 +113,20 @@ export default function JlosmeScreen() {
     // download takes (Overpass can take anywhere from a couple seconds to
     // tens of seconds).
     setMode("view");
-    setBusy("Downloading from OpenStreetMap…");
     setStatusMessage(null);
+    setDownloadElapsedMs(0);
+    const controller = new AbortController();
+    downloadAbortRef.current = controller;
+    const startedAt = Date.now();
+    setBusy("Downloading from OpenStreetMap…");
+    // A single indeterminate spinner gave no sense of whether a slow
+    // download was progressing or frozen — Overpass has no real progress
+    // API to report against, so this can't be a true percentage bar, but a
+    // ticking elapsed-time readout plus a way to bail out is a big step up
+    // from nothing moving on screen at all.
+    const tick = setInterval(() => setDownloadElapsedMs(Date.now() - startedAt), 500);
     try {
-      const result = await api.downloadOsmEditorArea(baseUrl, token, area);
+      const result = await api.downloadOsmEditorArea(baseUrl, token, area, controller.signal);
       setElements(result.elements);
       setStatusMessage({
         kind: "info",
@@ -123,10 +135,18 @@ export default function JlosmeScreen() {
         }.`,
       });
     } catch (e) {
-      setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Download failed" });
+      if (!(e instanceof CancelledError)) {
+        setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Download failed" });
+      }
     } finally {
+      clearInterval(tick);
+      downloadAbortRef.current = null;
       setBusy(null);
     }
+  }
+
+  function cancelDownload() {
+    downloadAbortRef.current?.abort();
   }
 
   function handleBoundaryFinish(points: { lat: number; lon: number }[]) {
@@ -296,7 +316,15 @@ export default function JlosmeScreen() {
         {busy ? (
           <View style={styles.busyBanner}>
             <ActivityIndicator size="small" />
-            <Text style={styles.busyText}>{busy}</Text>
+            <Text style={[styles.busyText, styles.busyTextFlex]}>
+              {busy}
+              {downloadAbortRef.current ? ` (${Math.round(downloadElapsedMs / 1000)}s)` : ""}
+            </Text>
+            {downloadAbortRef.current ? (
+              <TouchableOpacity onPress={cancelDownload} hitSlop={8} style={styles.busyCancelButton}>
+                <Text style={styles.busyCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         ) : null}
 
@@ -602,6 +630,9 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   busyText: { fontFamily: fonts.regular, fontSize: 12, color: "#444" },
+  busyTextFlex: { flex: 1 },
+  busyCancelButton: { paddingHorizontal: 8, paddingVertical: 4 },
+  busyCancelText: { fontFamily: fonts.medium, fontSize: 12, color: "#c0392b" },
   toolbar: {
     position: "absolute",
     left: 12,
