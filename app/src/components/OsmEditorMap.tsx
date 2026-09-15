@@ -61,18 +61,15 @@ export interface OsmEditorMapHandle {
 
 const DEFAULT_REGION = { latitude: 39.8283, longitude: -98.5795, latitudeDelta: 30, longitudeDelta: 30 };
 
+// Width, in screen points (fixed regardless of zoom), of the tinted border
+// band drawn around an area's outline — see the areal-way rendering below.
+const AREA_FILL_BAND_PX = 24;
+
 function actionColor(action: OsmEditorElement["action"]): string {
   if (action === "create") return "#27ae60";
   if (action === "modify") return "#e67e22";
   if (action === "delete") return "#c0392b";
   return "#2980b9";
-}
-
-function withAlpha(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(function OsmEditorMap(
@@ -181,16 +178,35 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const closed = geom.nodeIds.length >= 2 && geom.nodeIds[0] === geom.nodeIds[geom.nodeIds.length - 1];
           const key = `way-${el.id}`;
           if (wayLooksAreal(el) && closed) {
+            // Same border-band treatment as the web map (see
+            // OsmEditorMap.web.tsx) — JOSM only tints near an area's
+            // outline rather than solid-filling the whole interior, so a
+            // big polygon doesn't fully hide the imagery underneath.
+            // react-native-maps' strokeWidth is also a fixed on-screen
+            // point size (not a world distance), so a thick unfilled
+            // stroke reproduces it the same way: small shapes' opposite
+            // bands overlap into a full fill, big ones keep a transparent
+            // center at any zoom.
+            const onPress = () => onSelect(osmEditorElementKey("way", el.id));
             return (
-              <Polygon
-                key={key}
-                coordinates={latlngs}
-                strokeColor={color}
-                fillColor={withAlpha(areaFillColor(el.tags), 0.55)}
-                strokeWidth={selected ? 5 : 3}
-                tappable
-                onPress={() => onSelect(osmEditorElementKey("way", el.id))}
-              />
+              <React.Fragment key={key}>
+                <Polygon
+                  coordinates={latlngs}
+                  strokeColor={areaFillColor(el.tags)}
+                  fillColor="transparent"
+                  strokeWidth={AREA_FILL_BAND_PX}
+                  tappable
+                  onPress={onPress}
+                />
+                <Polygon
+                  coordinates={latlngs}
+                  strokeColor={color}
+                  fillColor="transparent"
+                  strokeWidth={selected ? 5 : 3}
+                  tappable
+                  onPress={onPress}
+                />
+              </React.Fragment>
             );
           }
           return (

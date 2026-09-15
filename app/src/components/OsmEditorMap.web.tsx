@@ -132,6 +132,10 @@ function draftVertexIcon(L: Leaflet, color: string) {
 // layer forgot to.
 const MAP_MAX_ZOOM = 24;
 
+// Width, in screen pixels (fixed regardless of zoom), of the tinted border
+// band drawn around an area's outline — see the areal-way rendering below.
+const AREA_FILL_BAND_PX = 24;
+
 function createBaseLayer(L: Leaflet, kind: EditorBaseLayer): Leaflet {
   if (kind === "satellite") {
     // Esri World Imagery confirmed (main Map tab, this session) to have
@@ -613,23 +617,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const areal = wayLooksAreal(el);
           const geom = wayGeometry(el);
           const closed = geom.nodeIds.length >= 2 && geom.nodeIds[0] === geom.nodeIds[geom.nodeIds.length - 1];
-          const shape = areal && closed
-            ? L.polygon(latlngs, {
-                color, // outline stays action-colored — what you've done to it
-                weight: selected ? 5 : 3,
-                fillColor: areaFillColor(el.tags), // fill is tag-colored — what it is
-                // JOSM keeps its area fills close to full strength rather
-                // than washing them out — 0.35 read as barely-there next to
-                // the outline, especially over satellite/lidar imagery.
-                fillOpacity: 0.55,
-                dashArray: el.action === "delete" ? "6 4" : undefined,
-              })
-            : L.polyline(latlngs, {
-                color,
-                weight: selected ? 5 : 3,
-                dashArray: el.action === "delete" ? "6 4" : undefined,
-              });
-          shape.addTo(layer).on("click", (e: { originalEvent: Event }) => {
+
+          const handleShapeClick = (e: { originalEvent: Event }) => {
             // e.originalEvent.stopPropagation() alone only stops native DOM
             // bubbling — Leaflet fires its own map "click" separately by
             // walking each layer's _eventParents (see Layer#_propagateEvent),
@@ -638,7 +627,43 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // whatever was just selected in the same tick.
             L.DomEvent.stopPropagation(e);
             onSelectRef.current(key);
-          });
+          };
+
+          if (areal && closed) {
+            // JOSM doesn't solid-fill an area's whole interior — only a
+            // border band near the outline is tinted, so a big polygon
+            // (forest, farmland, a lake) doesn't fully hide the imagery
+            // underneath. A path's `weight` in Leaflet is a fixed pixel
+            // width, not a world distance, so a thick unfilled stroke along
+            // the boundary reproduces this for free: for a small shape like
+            // a building the bands from opposite edges overlap and it reads
+            // as fully filled, while a large shape keeps a transparent
+            // center at any zoom.
+            L.polygon(latlngs, {
+              color: areaFillColor(el.tags), // the band is tag-colored — what it is
+              weight: AREA_FILL_BAND_PX,
+              opacity: 0.55,
+              fill: false,
+            })
+              .addTo(layer)
+              .on("click", handleShapeClick);
+            L.polygon(latlngs, {
+              color, // the crisp boundary stays action-colored — what you've done to it
+              weight: selected ? 5 : 3,
+              fill: false,
+              dashArray: el.action === "delete" ? "6 4" : undefined,
+            })
+              .addTo(layer)
+              .on("click", handleShapeClick);
+          } else {
+            L.polyline(latlngs, {
+              color,
+              weight: selected ? 5 : 3,
+              dashArray: el.action === "delete" ? "6 4" : undefined,
+            })
+              .addTo(layer)
+              .on("click", handleShapeClick);
+          }
         }
       }
 
