@@ -492,6 +492,20 @@ export default function JlosmeScreen() {
           >
             <Text style={styles.toolbarButtonText}>⚙️ Square</Text>
           </TouchableOpacity>
+          {/* Same clear-the-working-set action already in the imagery panel
+              (🗺️) — also here in the main toolbar since that's the more
+              obvious place to look for it. Shares clearArmed/
+              handleClearWorkingSet so either button's confirm step covers
+              the other too. */}
+          <TouchableOpacity
+            style={[styles.toolbarButton, clearArmed && styles.toolbarButtonDanger]}
+            onPress={() => (clearArmed ? handleClearWorkingSet() : setClearArmed(true))}
+            onBlur={() => setClearArmed(false)}
+          >
+            <Text style={[styles.toolbarButtonText, clearArmed && styles.toolbarButtonDangerText]}>
+              {clearArmed ? "Tap again to confirm" : "🗑️ Clear data"}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <TouchableOpacity style={styles.imageryButton} onPress={() => setShowImagery(true)}>
@@ -802,6 +816,8 @@ const styles = StyleSheet.create({
   toolbarButton: { backgroundColor: "#f0f0f0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   toolbarButtonActive: { backgroundColor: "#2980b9" },
   toolbarButtonDisabled: { opacity: 0.5 },
+  toolbarButtonDanger: { backgroundColor: "#fdecea" },
+  toolbarButtonDangerText: { color: "#c0392b" },
   toolbarButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#333" },
   imageryButton: {
     position: "absolute",
