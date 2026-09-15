@@ -3,7 +3,7 @@ import { StyleSheet, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import type { OsmEditorElement } from "../api";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
-import { nodeGeometry, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
+import { areaFillColor, nodeGeometry, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 
@@ -186,7 +186,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 key={key}
                 coordinates={latlngs}
                 strokeColor={color}
-                fillColor={withAlpha(color, 0.25)}
+                fillColor={withAlpha(areaFillColor(el.tags), 0.35)}
                 strokeWidth={selected ? 5 : 3}
                 tappable
                 onPress={() => onSelect(osmEditorElementKey("way", el.id))}

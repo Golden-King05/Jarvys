@@ -75,3 +75,34 @@ export function wayLatLngs(
 export function elementDisplayName(el: OsmEditorElement): string {
   return el.tags.name ?? el.tags["name:en"] ?? `${el.type} ${el.id}`;
 }
+
+// Area fill colors by feature type — the same rough hues OSM's own standard
+// map style (and JOSM/iD) use, so they read as familiar rather than
+// arbitrary: buildings tan, water blue, forest/wood green, grass/parks
+// lighter green, farmland pale yellow, parking a dull yellow-grey,
+// residential/commercial/industrial land pale neutral tints. Checked in
+// priority order (a feature can carry several matching tags at once —
+// building takes precedence since it's the physical structure). Editing
+// state (new/modified/deleted) stays on the OUTLINE color (actionColor, in
+// OsmEditorMap.web.tsx) rather than the fill, so both are visible on the
+// same shape at once — what it is vs. what you've done to it.
+const AREA_FILL_RULES: { test: (tags: Record<string, string>) => boolean; color: string }[] = [
+  { test: (t) => t.building !== undefined, color: "#d9c9a8" },
+  { test: (t) => t.natural === "water" || t.landuse === "reservoir" || t.waterway === "riverbank", color: "#8fc3e0" },
+  { test: (t) => t.natural === "wetland", color: "#8fd0c8" },
+  { test: (t) => t.natural === "wood" || t.landuse === "forest", color: "#9dca8a" },
+  { test: (t) => t.natural === "sand" || t.natural === "beach", color: "#f2e6b3" },
+  { test: (t) => t.landuse === "grass" || t.leisure === "park" || t.leisure === "garden", color: "#c8eaa0" },
+  { test: (t) => t.leisure === "pitch" || t.leisure === "sports_centre" || t.leisure === "golf_course", color: "#b3e0a0" },
+  { test: (t) => t.landuse === "farmland" || t.landuse === "farmyard" || t.landuse === "orchard", color: "#eef0c5" },
+  { test: (t) => t.amenity === "parking" || t.landuse === "garages", color: "#e0d9a0" },
+  { test: (t) => t.landuse === "residential", color: "#e3e0dc" },
+  { test: (t) => t.landuse === "commercial" || t.landuse === "retail", color: "#f0cdd0" },
+  { test: (t) => t.landuse === "industrial", color: "#e6d3ea" },
+  { test: (t) => t.amenity === "school" || t.amenity === "university" || t.amenity === "hospital", color: "#f2d9a8" },
+];
+const AREA_FILL_DEFAULT = "#c4c4c4"; // no recognized area-type tag yet
+
+export function areaFillColor(tags: Record<string, string>): string {
+  return AREA_FILL_RULES.find((rule) => rule.test(tags))?.color ?? AREA_FILL_DEFAULT;
+}

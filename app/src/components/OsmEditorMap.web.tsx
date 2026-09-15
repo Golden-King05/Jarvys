@@ -3,7 +3,7 @@ import type { OsmEditorElement } from "../api";
 import { bingTileUrl, BING_ATTRIBUTION, getBingMapsKey, isBingConfigured } from "../utils/bingImagery";
 import { OSM_ATTRIBUTION, OSM_TILE_URL, SATELLITE_ATTRIBUTION, SATELLITE_TILE_URL } from "../utils/baseLayer";
 import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
-import { osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
+import { areaFillColor, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 import { captureMapRegion, type CapturedRegion } from "../utils/mapCapture";
@@ -615,10 +615,10 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const closed = geom.nodeIds.length >= 2 && geom.nodeIds[0] === geom.nodeIds[geom.nodeIds.length - 1];
           const shape = areal && closed
             ? L.polygon(latlngs, {
-                color,
+                color, // outline stays action-colored — what you've done to it
                 weight: selected ? 5 : 3,
-                fillColor: color,
-                fillOpacity: 0.25,
+                fillColor: areaFillColor(el.tags), // fill is tag-colored — what it is
+                fillOpacity: 0.35,
                 dashArray: el.action === "delete" ? "6 4" : undefined,
               })
             : L.polyline(latlngs, {
