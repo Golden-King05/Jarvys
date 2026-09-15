@@ -35,6 +35,10 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
   // etc.) opens this instead of a plain value box.
   const [addrFormRow, setAddrFormRow] = useState<number | null>(null);
   const [addrDraft, setAddrDraft] = useState({ street: "", city: "", state: "", postcode: "", country: "" });
+  // Scrolling a chip row to find one header among a large vocabulary (OSM's
+  // real tag keys run into the hundreds) doesn't work — a search box lets
+  // you jump straight to it instead.
+  const [suggestionSearch, setSuggestionSearch] = useState("");
 
   function updateTag(i: number, patch: Partial<PointTag>) {
     onChange(tags.map((t, idx) => (idx === i ? { ...t, ...patch } : t)));
@@ -48,6 +52,7 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
 
   function addTag(key = "") {
     onChange([...tags, { key, value: "" }]);
+    setSuggestionSearch("");
   }
 
   function definitionFor(key: string): TagDefinition | undefined {
@@ -125,18 +130,39 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
     ]),
   ];
   const unusedSuggestions = allSuggestions.filter((k) => !tags.some((t) => t.key === k));
+  const searchTerm = suggestionSearch.trim().toLowerCase();
+  const filteredSuggestions = searchTerm
+    ? unusedSuggestions.filter((k) => k.toLowerCase().includes(searchTerm))
+    : unusedSuggestions;
 
   return (
     <View>
       <Text style={styles.label}>Tags</Text>
       {unusedSuggestions.length > 0 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsRow}>
-          {unusedSuggestions.map((key) => (
-            <TouchableOpacity key={key} style={styles.suggestionChip} onPress={() => addTag(key)}>
-              <Text style={styles.suggestionChipText}>{key}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        <>
+          {/* Below this many chips, scrolling to find one beats typing a
+              search — the box only earns its space once there's enough
+              vocabulary that finding one by eye gets slow. */}
+          {unusedSuggestions.length > 8 ? (
+            <TextInput
+              style={styles.suggestionSearchInput}
+              placeholder="Search tags…"
+              value={suggestionSearch}
+              onChangeText={setSuggestionSearch}
+            />
+          ) : null}
+          {filteredSuggestions.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsRow}>
+              {filteredSuggestions.map((key) => (
+                <TouchableOpacity key={key} style={styles.suggestionChip} onPress={() => addTag(key)}>
+                  <Text style={styles.suggestionChipText}>{key}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={styles.noSuggestionsText}>No matching tags — you can still type a new header below.</Text>
+          )}
+        </>
       ) : null}
       {tags.map((tag, i) => {
         const isAddrTrigger = tag.key.trim().toLowerCase() === "addr";
@@ -217,6 +243,17 @@ export default function TagsEditor({ tags, onChange, suggestedKeys, tagDefinitio
 
 const styles = StyleSheet.create({
   label: { fontFamily: fonts.medium, fontSize: 13, color: "#444", marginTop: 4, marginBottom: 6 },
+  suggestionSearchInput: {
+    fontFamily: fonts.regular,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  noSuggestionsText: { fontFamily: fonts.regular, fontSize: 12, color: "#999", marginBottom: 8 },
   suggestionsRow: { marginBottom: 8 },
   suggestionChip: {
     backgroundColor: "#f0f0f0",
