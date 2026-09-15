@@ -136,6 +136,37 @@ const MAP_MAX_ZOOM = 24;
 // band drawn around an area's outline — see the areal-way rendering below.
 const AREA_FILL_BAND_PX = 24;
 
+// Computes a hole ring, inset from `latlngs` by roughly `bandPx` screen
+// pixels, so a polygon-with-hole can tint only a band near the boundary
+// without the tint ever crossing outside it (unlike a centered stroke,
+// which straddles the line half-in/half-out). Approximates a true offset
+// by scaling every vertex toward the ring's centroid — exact for a convex
+// shape, a close-enough approximation for the mildly-concave shapes most
+// building footprints are. Returns null when the shape is too small for a
+// band at all (so the caller just fills it solid instead), or when the map
+// isn't ready yet to convert between latlng and screen space.
+function insetRingPx(map: Leaflet | null, latlngs: [number, number][], bandPx: number): [number, number][] | null {
+  if (!map) return null;
+  const closesItself =
+    latlngs.length >= 2 &&
+    latlngs[0][0] === latlngs[latlngs.length - 1][0] &&
+    latlngs[0][1] === latlngs[latlngs.length - 1][1];
+  const ring = closesItself ? latlngs.slice(0, -1) : latlngs;
+  if (ring.length < 3) return null;
+
+  const points = ring.map(([lat, lon]) => map.latLngToContainerPoint([lat, lon]));
+  const cx = points.reduce((sum: number, p: { x: number }) => sum + p.x, 0) / points.length;
+  const cy = points.reduce((sum: number, p: { y: number }) => sum + p.y, 0) / points.length;
+  const minRadius = Math.min(...points.map((p: { x: number; y: number }) => Math.hypot(p.x - cx, p.y - cy)));
+  if (minRadius <= bandPx) return null; // too small to keep a hole open
+
+  const scale = (minRadius - bandPx) / minRadius;
+  return points.map((p: { x: number; y: number }) => {
+    const ll = map.containerPointToLatLng({ x: cx + (p.x - cx) * scale, y: cy + (p.y - cy) * scale });
+    return [ll.lat, ll.lng] as [number, number];
+  });
+}
+
 function createBaseLayer(L: Leaflet, kind: EditorBaseLayer): Leaflet {
   if (kind === "satellite") {
     // Esri World Imagery confirmed (main Map tab, this session) to have
@@ -633,17 +664,20 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // JOSM doesn't solid-fill an area's whole interior — only a
             // border band near the outline is tinted, so a big polygon
             // (forest, farmland, a lake) doesn't fully hide the imagery
-            // underneath. A path's `weight` in Leaflet is a fixed pixel
-            // width, not a world distance, so a thick unfilled stroke along
-            // the boundary reproduces this for free: for a small shape like
-            // a building the bands from opposite edges overlap and it reads
-            // as fully filled, while a large shape keeps a transparent
-            // center at any zoom.
-            L.polygon(latlngs, {
-              color: areaFillColor(el.tags), // the band is tag-colored — what it is
-              weight: AREA_FILL_BAND_PX,
-              opacity: 0.55,
-              fill: false,
+            // underneath. The tint has to stay strictly inside the
+            // boundary rather than straddle it, so this is a true
+            // fill-with-a-hole (outer ring + an inset hole ring, evenodd
+            // fill rule) rather than a thick centered stroke — a stroke's
+            // width straddles the line half-in/half-out. A small shape's
+            // inset hole collapses away entirely (insetRingPx returns
+            // null), so it just reads as fully filled.
+            const hole = insetRingPx(mapInstance.current, latlngs, AREA_FILL_BAND_PX);
+            L.polygon(hole ? [latlngs, hole] : latlngs, {
+              color: areaFillColor(el.tags), // the fill is tag-colored — what it is
+              stroke: false,
+              fillColor: areaFillColor(el.tags),
+              fillOpacity: 0.55,
+              fillRule: "evenodd",
             })
               .addTo(layer)
               .on("click", handleShapeClick);

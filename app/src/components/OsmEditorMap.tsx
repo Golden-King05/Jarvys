@@ -61,9 +61,34 @@ export interface OsmEditorMapHandle {
 
 const DEFAULT_REGION = { latitude: 39.8283, longitude: -98.5795, latitudeDelta: 30, longitudeDelta: 30 };
 
-// Width, in screen points (fixed regardless of zoom), of the tinted border
-// band drawn around an area's outline — see the areal-way rendering below.
-const AREA_FILL_BAND_PX = 24;
+function withAlpha(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// How far in (as a fraction of the ring's own size) an area's hole is
+// inset from its outline — see the areal-way rendering below.
+const AREA_FILL_HOLE_FRACTION = 0.65;
+
+// Shrinks a ring toward its own centroid so an area's fill stays strictly
+// inside the boundary (JOSM tints only a band near the edge, not the whole
+// interior) rather than straddling it like a centered stroke would. The
+// web map (OsmEditorMap.web.tsx) insets by a fixed screen-pixel amount
+// using Leaflet's latlng<->pixel projection; native has no equivalent
+// projection readily available here, so this uses a fixed proportion of
+// the shape's own size instead — same "fill only near the edge" look,
+// just not perfectly constant across zoom levels.
+function insetRingFraction(latlngs: { latitude: number; longitude: number }[], fraction: number): { latitude: number; longitude: number }[] | null {
+  if (latlngs.length < 3) return null;
+  const cLat = latlngs.reduce((sum, p) => sum + p.latitude, 0) / latlngs.length;
+  const cLon = latlngs.reduce((sum, p) => sum + p.longitude, 0) / latlngs.length;
+  return latlngs.map((p) => ({
+    latitude: cLat + (p.latitude - cLat) * fraction,
+    longitude: cLon + (p.longitude - cLon) * fraction,
+  }));
+}
 
 function actionColor(action: OsmEditorElement["action"]): string {
   if (action === "create") return "#27ae60";
@@ -178,23 +203,20 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const closed = geom.nodeIds.length >= 2 && geom.nodeIds[0] === geom.nodeIds[geom.nodeIds.length - 1];
           const key = `way-${el.id}`;
           if (wayLooksAreal(el) && closed) {
-            // Same border-band treatment as the web map (see
-            // OsmEditorMap.web.tsx) — JOSM only tints near an area's
-            // outline rather than solid-filling the whole interior, so a
-            // big polygon doesn't fully hide the imagery underneath.
-            // react-native-maps' strokeWidth is also a fixed on-screen
-            // point size (not a world distance), so a thick unfilled
-            // stroke reproduces it the same way: small shapes' opposite
-            // bands overlap into a full fill, big ones keep a transparent
-            // center at any zoom.
+            // JOSM only tints a band near an area's outline rather than
+            // solid-filling the whole interior, so a big polygon doesn't
+            // fully hide the imagery underneath — see insetRingFraction
+            // above for why this is a proportional inset rather than a
+            // fixed-pixel one on native.
             const onPress = () => onSelect(osmEditorElementKey("way", el.id));
+            const hole = insetRingFraction(latlngs, AREA_FILL_HOLE_FRACTION);
             return (
               <React.Fragment key={key}>
                 <Polygon
                   coordinates={latlngs}
-                  strokeColor={areaFillColor(el.tags)}
-                  fillColor="transparent"
-                  strokeWidth={AREA_FILL_BAND_PX}
+                  holes={hole ? [hole] : undefined}
+                  strokeColor="transparent"
+                  fillColor={withAlpha(areaFillColor(el.tags), 0.55)}
                   tappable
                   onPress={onPress}
                 />
