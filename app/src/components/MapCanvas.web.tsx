@@ -32,6 +32,15 @@ const WIKI_POLL_MS = 8000;
 // shows nothing rather than that misleading result, the same way saved pins
 // stay hidden until zoomed in.
 const MIN_WIKI_ZOOM = 12;
+// How far past real imagery resolution the map can still be zoomed in —
+// past whatever a layer's own maxNativeZoom is, it just keeps stretching
+// its last real tile (blurrier, but still useful for lining something up).
+// Leaflet computes the whole map's actual zoom ceiling as the minimum
+// `maxZoom` across every added layer, so every tile layer below needs its
+// own `maxZoom` raised to match this, or the map silently stays capped at
+// whichever layer forgot to (confirmed the hard way working on the lidar
+// layer earlier this session).
+const MAP_MAX_ZOOM = 24;
 
 const LEAFLET_CSS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
 const LEAFLET_JS = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
@@ -279,12 +288,16 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
     loadLeaflet().then((L) => {
       if (cancelled || !containerRef.current || mapInstance.current) return;
       const center = initialRegion ? [initialRegion.latitude, initialRegion.longitude] : DEFAULT_CENTER;
-      const map = L.map(containerRef.current).setView(center, initialRegion ? 12 : 4);
+      const map = L.map(containerRef.current, { maxZoom: MAP_MAX_ZOOM }).setView(center, initialRegion ? 12 : 4);
       // Satellite can only ever be chosen after the map (and therefore the
       // Layers panel) is already visible, so the base layer this effect
       // creates on mount is always "map" in practice — the separate
       // baseLayer-swap effect below takes over for any later toggle.
-      const initialBase = L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION }).addTo(map);
+      const initialBase = L.tileLayer(OSM_TILE_URL, {
+        attribution: OSM_ATTRIBUTION,
+        maxNativeZoom: 19,
+        maxZoom: MAP_MAX_ZOOM,
+      }).addTo(map);
       initialBase.__baseLayerKind = "map";
       baseTileLayerRef.current = initialBase;
       // A tile that fails to load (a transient network blip, a momentarily
@@ -470,7 +483,7 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
           // literal text on the map and a ragged patchwork where some tiles
           // load and others don't. This tells Leaflet to stop requesting
           // past zoom 7 and upscale that tile instead.
-          radarLayerRef.current = L.tileLayer(template, { opacity: 0.6, maxNativeZoom: 7 }).addTo(map);
+          radarLayerRef.current = L.tileLayer(template, { opacity: 0.6, maxNativeZoom: 7, maxZoom: MAP_MAX_ZOOM }).addTo(map);
         }
       } else if (radarLayerRef.current) {
         map.removeLayer(radarLayerRef.current);
@@ -496,6 +509,10 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
             // that), our own server renders each tile from the DEM on
             // request, so every zoom level gets a genuine render — no
             // native-zoom ceiling or blur-past-a-zoom workaround needed.
+            // Still needs its own maxZoom raised to MAP_MAX_ZOOM though, or
+            // it becomes the layer capping the whole map (see MAP_MAX_ZOOM's
+            // comment).
+            maxZoom: MAP_MAX_ZOOM,
           }).addTo(map);
           layer.getContainer().style.filter = `contrast(${lidarContrast}%)`;
           lidarLayerRef.current = layer;
@@ -536,6 +553,8 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       map.removeLayer(current);
       const next = L.tileLayer(baseLayer === "satellite" ? SATELLITE_TILE_URL : OSM_TILE_URL, {
         attribution: baseLayer === "satellite" ? SATELLITE_ATTRIBUTION : OSM_ATTRIBUTION,
+        maxNativeZoom: baseLayer === "satellite" ? 21 : 19,
+        maxZoom: MAP_MAX_ZOOM,
       });
       // Keep it beneath every overlay layer added since mount (lidar,
       // radar, saved-point markers, ...) rather than on top of them.

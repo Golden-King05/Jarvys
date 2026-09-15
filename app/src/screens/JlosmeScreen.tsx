@@ -26,11 +26,14 @@ import { isBingConfigured } from "../utils/bingImagery";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 import {
   elementDisplayName,
+  nodeGeometry,
   osmEditorElementKey,
   tagsListToRecord,
   tagsRecordToList,
+  wayGeometry,
 } from "../utils/osmEditorGeometry";
 import { useDebouncedTagsDraft } from "../utils/useDebouncedTagsDraft";
+import { squareWayNodes } from "../utils/squareWay";
 
 // The tab is labeled "JLOSME" in the UI (the user's own chosen name) even
 // though every internal file/component uses plain descriptive names — this
@@ -250,6 +253,62 @@ export default function JlosmeScreen() {
     }
   }
 
+  // "Square selection" (JOSM calls this Orthogonalize, its Q shortcut) —
+  // snaps the selected way's corners to clean right angles. Only makes
+  // sense for a way (a building outline, typically one that was hand-drawn
+  // or AI-traced and came out slightly off-rectangular).
+  async function handleSquareSelection() {
+    if (!token || !selectedElement || selectedElement.type !== "way") return;
+    const nodeIds = wayGeometry(selectedElement).nodeIds;
+    const nodePositions = nodeIds.map((id) => {
+      const node = elements.find((el) => el.type === "node" && el.id === id);
+      return node ? nodeGeometry(node) : null;
+    });
+    if (nodePositions.some((p) => p === null)) {
+      setStatusMessage({ kind: "error", text: "Can't square this way — it references a node outside the downloaded area." });
+      return;
+    }
+    const squared = squareWayNodes(nodePositions as { lat: number; lon: number }[]);
+    if (!squared) {
+      setStatusMessage({ kind: "error", text: "Too few distinct corners to square." });
+      return;
+    }
+    setBusy("Squaring…");
+    try {
+      // A closed way repeats its first node id as its last — patch each
+      // unique node id once, not once per position in the (possibly
+      // repeated) node list.
+      const seen = new Set<number>();
+      for (let i = 0; i < nodeIds.length; i++) {
+        const id = nodeIds[i];
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const pos = squared[i];
+        const updated = await api.patchOsmEditorElement(baseUrl, token, "node", id, { geometry: pos });
+        upsertElement(updated);
+      }
+    } catch (e) {
+      setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not square selection" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Ctrl+Q (web/desktop only — native's equivalent is the long-press on the
+  // square-selection toolbar button below).
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key.toLowerCase() === "q") {
+        e.preventDefault();
+        handleSquareSelection();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedElement, token]);
+
   async function deleteElement(type: OsmElementType, id: number) {
     if (!token) return;
     try {
@@ -420,6 +479,18 @@ export default function JlosmeScreen() {
           ) : null}
           <TouchableOpacity style={styles.toolbarButton} onPress={() => setShowRelations(true)}>
             <Text style={styles.toolbarButtonText}>Relations ({relations.length})</Text>
+          </TouchableOpacity>
+          {/* Square selection (JOSM's Orthogonalize) — snaps the selected
+              way's corners to right angles. Hold rather than tap, so a
+              stray touch doesn't reshape a building; Ctrl+Q does the same
+              thing on web/desktop (see the keydown listener above). */}
+          <TouchableOpacity
+            style={[styles.toolbarButton, !selectedElement || selectedElement.type !== "way" ? styles.toolbarButtonDisabled : null]}
+            onPress={() => setStatusMessage({ kind: "info", text: "Hold this button to square the selected way (or press Ctrl+Q)." })}
+            onLongPress={handleSquareSelection}
+            delayLongPress={500}
+          >
+            <Text style={styles.toolbarButtonText}>⚙️ Square</Text>
           </TouchableOpacity>
         </View>
 
@@ -730,6 +801,7 @@ const styles = StyleSheet.create({
   },
   toolbarButton: { backgroundColor: "#f0f0f0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   toolbarButtonActive: { backgroundColor: "#2980b9" },
+  toolbarButtonDisabled: { opacity: 0.5 },
   toolbarButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#333" },
   imageryButton: {
     position: "absolute",

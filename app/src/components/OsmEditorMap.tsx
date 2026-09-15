@@ -154,6 +154,12 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       mapType={baseLayer === "satellite" ? "satellite" : "standard"}
       initialRegion={initialRegion ? { ...initialRegion, latitudeDelta: 0.05, longitudeDelta: 0.05 } : DEFAULT_REGION}
       onPress={(e) => handleMapPress(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
+      // Same reasoning as the web map's MAP_MAX_ZOOM — precise editing
+      // benefits from zooming in past whatever the imagery itself supports.
+      // The underlying platform map SDK (Apple/Google Maps) has its own
+      // real ceiling this can't exceed, but nothing here should be the one
+      // stopping it short of that.
+      maxZoomLevel={24}
     >
       {showLidar ? <UrlTile urlTemplate={USGS_LIDAR_TILE_URL} zIndex={0} opacity={lidarOpacity} /> : null}
 

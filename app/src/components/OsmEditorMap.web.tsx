@@ -112,18 +112,39 @@ function draftVertexIcon(L: Leaflet, color: string) {
 // call throws a SecurityError. All of OSM's, Esri's and this app's own
 // lidar proxy's tile responses were confirmed (by hand, this session) to
 // send permissive CORS headers, so this doesn't change what actually loads.
+// Precise editing (placing a node exactly, squaring a building) benefits
+// from zooming in well past whatever resolution the actual imagery
+// supports — past that point every layer just keeps stretching its last
+// real tile, blurrier but still useful as a rough guide. MAP_MAX_ZOOM is
+// the ceiling everything zooms to; each layer's own maxNativeZoom is where
+// IT stops requesting sharper tiles and starts stretching. Leaflet computes
+// the whole map's actual zoom ceiling as the minimum `maxZoom` across every
+// added layer (confirmed the hard way earlier working on the main Map
+// tab's lidar layer) — so every layer below must also have its own
+// `maxZoom` raised to match, or the map silently stays capped at whichever
+// layer forgot to.
+const MAP_MAX_ZOOM = 24;
+
 function createBaseLayer(L: Leaflet, kind: EditorBaseLayer): Leaflet {
   if (kind === "satellite") {
-    return L.tileLayer(SATELLITE_TILE_URL, { attribution: SATELLITE_ATTRIBUTION, crossOrigin: true });
+    // Esri World Imagery confirmed (main Map tab, this session) to have
+    // real tiles to zoom 21 in a dense city.
+    return L.tileLayer(SATELLITE_TILE_URL, {
+      attribution: SATELLITE_ATTRIBUTION,
+      crossOrigin: true,
+      maxNativeZoom: 21,
+      maxZoom: MAP_MAX_ZOOM,
+    });
   }
   if (kind === "bing" && isBingConfigured()) {
     const key = getBingMapsKey();
     const BingLayer = L.TileLayer.extend({
       getTileUrl: (coords: { x: number; y: number; z: number }) => bingTileUrl(coords.x, coords.y, coords.z, key),
     });
-    return new BingLayer("", { attribution: BING_ATTRIBUTION, crossOrigin: true });
+    return new BingLayer("", { attribution: BING_ATTRIBUTION, crossOrigin: true, maxNativeZoom: 21, maxZoom: MAP_MAX_ZOOM });
   }
-  return L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION, crossOrigin: true });
+  // Standard OSM raster tiles top out at zoom 19.
+  return L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION, crossOrigin: true, maxNativeZoom: 19, maxZoom: MAP_MAX_ZOOM });
 }
 
 const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(function OsmEditorMap(
@@ -459,7 +480,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     loadLeaflet().then((L) => {
       if (cancelled || !containerRef.current || mapInstance.current) return;
       const center = initialRegion ? [initialRegion.latitude, initialRegion.longitude] : DEFAULT_CENTER;
-      const map = L.map(containerRef.current).setView(center, initialRegion ? 15 : 4);
+      const map = L.map(containerRef.current, { maxZoom: MAP_MAX_ZOOM }).setView(center, initialRegion ? 15 : 4);
       const base = createBaseLayer(L, baseLayer).addTo(map);
       baseTileLayerRef.current = base;
       map.on("click", (e: { latlng: { lat: number; lng: number }; containerPoint: { x: number; y: number } }) => {
@@ -532,6 +553,12 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             opacity: lidarOpacity,
             attribution: USGS_LIDAR_ATTRIBUTION,
             crossOrigin: true,
+            // Rendered per-request server-side (see server/src/lidarTiles.ts)
+            // rather than a fixed tile pyramid, so there's no real native
+            // ceiling to set here — just needs its own maxZoom raised to
+            // MAP_MAX_ZOOM like every other layer (see createBaseLayer's
+            // comment) so it isn't the layer that silently caps the map.
+            maxZoom: MAP_MAX_ZOOM,
           }).addTo(map);
         }
       } else if (lidarLayerRef.current) {

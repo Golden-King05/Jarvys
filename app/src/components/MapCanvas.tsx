@@ -362,6 +362,11 @@ const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function Map
       onRegionChangeComplete={(region) => setCurrentZoom(zoomFromLongitudeDelta(region.longitudeDelta))}
       showsUserLocation={showLiveLocation}
       showsMyLocationButton={showLiveLocation}
+      // Past whatever the imagery itself supports, the map just keeps
+      // stretching its last real tile rather than refusing to zoom further
+      // — the platform map SDK (Apple/Google Maps) has its own real ceiling
+      // this can't exceed, but nothing here should stop it short of that.
+      maxZoomLevel={24}
     >
       {showLidar ? (
         // Unlike the old pre-cached tile source (which had nothing past
