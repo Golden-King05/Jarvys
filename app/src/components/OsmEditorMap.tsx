@@ -33,6 +33,10 @@ import type { AiTraceStatus } from "../utils/aiTraceTypes";
 export type EditorMode =
   | "view"
   | "draw-boundary"
+  // The toolbar's single "+" button's mode — see OsmEditorMap.web.tsx's
+  // matching comment. "new-node"/"new-way" stay as their own explicit
+  // modes, reachable by holding "+".
+  | "add"
   | "new-node"
   | "new-way"
   | "ai-trace-building"
@@ -46,6 +50,18 @@ export type EditorBaseLayer = "osm" | "satellite" | "bing";
 // redrawn way (a stop sign, a hydrant) keeps its own identity/tags/history
 // instead of losing them to a plain new geometry-only node.
 export type WayDraftPoint = { existingId: number } | { reattachId: number; lat: number; lon: number } | { lat: number; lon: number };
+
+// Maps the raw draft points into the shape onWayFinish expects — shared by
+// finishDraw (open way) and handleCloseLoop (area) below.
+function mapDraftPoints(pts: { lat: number; lon: number; existingId?: number; reattachId?: number }[]): WayDraftPoint[] {
+  return pts.map((p) =>
+    p.existingId !== undefined
+      ? { existingId: p.existingId }
+      : p.reattachId !== undefined
+        ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
+        : { lat: p.lat, lon: p.lon }
+  );
+}
 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
@@ -179,7 +195,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   }, [elements]);
 
   function handleMapPress(lat: number, lon: number) {
-    if (mode === "draw-boundary" || mode === "new-way") {
+    if (mode === "draw-boundary" || mode === "new-way" || mode === "add") {
       setDraftPoints((pts) => [...pts, { lat, lon }]);
     } else if (mode === "new-node") {
       onCreateNode(lat, lon);
@@ -189,7 +205,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   }
 
   function handleNodePress(id: number, lat: number, lon: number) {
-    if (mode === "new-way") {
+    if (mode === "new-way" || mode === "add") {
       setDraftPoints((pts) => [...pts, { lat, lon, existingId: id }]);
       return;
     }
@@ -200,8 +216,17 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   // draft point at that same spot, marked to reattach the parked node's
   // real id rather than create a fresh one.
   function handleGuidePress(id: number, lat: number, lon: number) {
-    if (mode !== "new-way") return;
+    if (mode !== "new-way" && mode !== "add") return;
     setDraftPoints((pts) => [...pts, { lat, lon, reattachId: id }]);
+  }
+
+  // The way-draft's starting point was pressed again — closes it into an
+  // area by reusing the first point's own resolved id at the end (the same
+  // closeLoop mechanic the AI building tracer uses on web).
+  function handleCloseLoop() {
+    if (draftPoints.length < 3) return;
+    onWayFinish(mapDraftPoints(draftPoints), true);
+    setDraftPoints([]);
   }
 
   useImperativeHandle(
@@ -211,15 +236,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         if (mode === "draw-boundary" && draftPoints.length >= 3) {
           onBoundaryFinish(draftPoints.map((p) => ({ lat: p.lat, lon: p.lon })));
         } else if (mode === "new-way" && draftPoints.length >= 2) {
-          onWayFinish(
-            draftPoints.map((p) =>
-              p.existingId !== undefined
-                ? { existingId: p.existingId }
-                : p.reattachId !== undefined
-                  ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
-                  : { lat: p.lat, lon: p.lon }
-            )
-          );
+          onWayFinish(mapDraftPoints(draftPoints));
+        } else if (mode === "add") {
+          // The single "+" mode: one pending point alone becomes a
+          // standalone node, two or more become an (open) way.
+          if (draftPoints.length === 1) {
+            onCreateNode(draftPoints[0].lat, draftPoints[0].lon);
+          } else if (draftPoints.length >= 2) {
+            onWayFinish(mapDraftPoints(draftPoints));
+          }
         }
         setDraftPoints([]);
       },
@@ -235,7 +260,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         };
       },
     }),
-    [mode, draftPoints, onBoundaryFinish, onWayFinish]
+    [mode, draftPoints, onBoundaryFinish, onWayFinish, onCreateNode]
   );
 
   const draftColor = mode === "draw-boundary" ? "#8e44ad" : "#16a085";
@@ -407,11 +432,25 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           lineDashPattern={[6, 4]}
         />
       ) : null}
-      {draftPoints.map((p, i) => (
-        <Marker key={`draft-${i}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={[styles.draftDot, { backgroundColor: draftColor }]} />
-        </Marker>
-      ))}
+      {draftPoints.map((p, i) => {
+        // Once there are enough points to form an area (3+), the first one
+        // becomes its own tappable target — pressing it closes the way
+        // into a loop, the same as tapping back on a way's starting node
+        // in JOSM, instead of requiring the "+"/Finish button.
+        const closable = (mode === "new-way" || mode === "add") && draftPoints.length >= 3 && i === 0;
+        if (closable) {
+          return (
+            <Marker key={`draft-${i}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }} onPress={handleCloseLoop}>
+              <View style={[styles.draftDotClosable, { borderColor: draftColor }]} />
+            </Marker>
+          );
+        }
+        return (
+          <Marker key={`draft-${i}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={[styles.draftDot, { backgroundColor: draftColor }]} />
+          </Marker>
+        );
+      })}
     </MapView>
   );
 });
@@ -422,6 +461,7 @@ const styles = StyleSheet.create({
   nodeDot: { borderWidth: 1.5 },
   nodeBadge: { backgroundColor: "#fff", borderWidth: 2, alignItems: "center", justifyContent: "center" },
   draftDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: "#fff" },
+  draftDotClosable: { width: 16, height: 16, borderRadius: 8, borderWidth: 3, backgroundColor: "#fff" },
   redrawGuideDot: {
     width: 12,
     height: 12,

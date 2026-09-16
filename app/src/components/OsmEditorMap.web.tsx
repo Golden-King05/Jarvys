@@ -52,6 +52,14 @@ function loadLeaflet(): Promise<Leaflet> {
 export type EditorMode =
   | "view"
   | "draw-boundary"
+  // The toolbar's single "+" button's mode — tapping the map drops a
+  // pending point; tapping "+" again commits it alone as a node, while
+  // tapping the map again instead grows it into a way (tapping the
+  // highlighted starting point closes it into an area). "new-node" and
+  // "new-way" below are the same underlying drawing behavior, still kept
+  // as their own explicit modes reachable by holding "+", for jumping
+  // straight into one without the single-tap ambiguity.
+  | "add"
   | "new-node"
   | "new-way"
   | "ai-trace-building"
@@ -160,12 +168,15 @@ function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<str
   });
 }
 
-function draftVertexIcon(L: Leaflet, color: string) {
-  return L.divIcon({
-    html: `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:2px solid #fff;transform:translate(-50%,-50%)"></div>`,
-    className: "",
-    iconSize: [0, 0],
-  });
+// `closable`: this is the way-draft's own first point, and there are
+// enough points to close it into an area — rendered larger/hollow (rather
+// than the plain filled dot) so it reads as its own tappable target, not
+// just another vertex.
+function draftVertexIcon(L: Leaflet, color: string, closable = false) {
+  const html = closable
+    ? `<div style="width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid ${color};transform:translate(-50%,-50%)"></div>`
+    : `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:2px solid #fff;transform:translate(-50%,-50%)"></div>`;
+  return L.divIcon({ html, className: "", iconSize: [0, 0] });
 }
 
 // crossOrigin is required so the AI tracing tools can read pixels back out
@@ -381,14 +392,48 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         { color, weight: 2, dashArray: "6 4" }
       ).addTo(layer);
     }
-    pts.forEach((p) => {
-      L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, color), interactive: false }).addTo(layer);
+    // Once there are enough points to form an area (3+), the very first
+    // one becomes its own tappable target — tapping it closes the way into
+    // a loop instead of requiring the "+"/Finish button, mirroring how
+    // JOSM closes an area by clicking back on its starting node.
+    const canClose = (modeRef.current === "new-way" || modeRef.current === "add") && pts.length >= 3;
+    pts.forEach((p, i) => {
+      const closable = canClose && i === 0;
+      const marker = L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, color, closable), interactive: closable }).addTo(layer);
+      if (closable) {
+        marker.on("click", (e: { originalEvent: Event }) => {
+          L.DomEvent.stopPropagation(e);
+          closeLoop(L);
+        });
+      }
     });
+  }
+
+  // Maps the raw draft points into the shape onWayFinish expects — shared
+  // by finishDraw (open way) and closeLoop (area) below.
+  function mapDraftPoints(pts: { lat: number; lon: number; existingId?: number; reattachId?: number }[]): WayDraftPoint[] {
+    return pts.map((p) =>
+      p.existingId !== undefined
+        ? { existingId: p.existingId }
+        : p.reattachId !== undefined
+          ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
+          : { lat: p.lat, lon: p.lon }
+    );
   }
 
   function clearDraft(L: Leaflet) {
     draftPoints.current = [];
     redrawDraft(L);
+  }
+
+  // The way-draft's starting point was tapped again — finishes it as a
+  // closed loop (an area) by reusing the first point's own resolved id at
+  // the end, the same closeLoop mechanic the AI building tracer uses.
+  function closeLoop(L: Leaflet) {
+    const pts = draftPoints.current;
+    if (pts.length < 3) return;
+    onWayFinishRef.current(mapDraftPoints(pts), true);
+    clearDraft(L);
   }
 
   // Flattens the road tracer's per-segment traces into one continuous
@@ -572,7 +617,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     if (m === "draw-boundary") {
       draftPoints.current = [...draftPoints.current, { lat, lon }];
       redrawDraft(L);
-    } else if (m === "new-way") {
+    } else if (m === "new-way" || m === "add") {
       draftPoints.current = [...draftPoints.current, { lat, lon }];
       redrawDraft(L);
     } else if (m === "new-node") {
@@ -587,7 +632,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   }
 
   function handleNodeClick(L: Leaflet, id: number, lat: number, lon: number, containerPoint: { x: number; y: number }) {
-    if (modeRef.current === "new-way") {
+    if (modeRef.current === "new-way" || modeRef.current === "add") {
       draftPoints.current = [...draftPoints.current, { lat, lon, existingId: id }];
       redrawDraft(L);
       return;
@@ -599,7 +644,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   // draft point at that same spot, marked to reattach the parked node's
   // real id rather than create a fresh one.
   function handleGuideClick(L: Leaflet, id: number, lat: number, lon: number) {
-    if (modeRef.current !== "new-way") return;
+    if (modeRef.current !== "new-way" && modeRef.current !== "add") return;
     draftPoints.current = [...draftPoints.current, { lat, lon, reattachId: id }];
     redrawDraft(L);
   }
@@ -609,15 +654,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     if (modeRef.current === "draw-boundary" && pts.length >= 3) {
       onBoundaryFinishRef.current(pts.map((p) => ({ lat: p.lat, lon: p.lon })));
     } else if (modeRef.current === "new-way" && pts.length >= 2) {
-      onWayFinishRef.current(
-        pts.map((p) =>
-          p.existingId !== undefined
-            ? { existingId: p.existingId }
-            : p.reattachId !== undefined
-              ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
-              : { lat: p.lat, lon: p.lon }
-        )
-      );
+      onWayFinishRef.current(mapDraftPoints(pts));
+    } else if (modeRef.current === "add") {
+      // The single "+" mode: one pending point alone becomes a standalone
+      // node, two or more become an (open) way — see EditorMode's comment.
+      if (pts.length === 1) {
+        onCreateNodeRef.current(pts[0].lat, pts[0].lon);
+      } else if (pts.length >= 2) {
+        onWayFinishRef.current(mapDraftPoints(pts));
+      }
     } else if (modeRef.current === "ai-trace-building") {
       const draft = aiBuildingDraftRef.current;
       if (draft && draft.points.length >= 3) {

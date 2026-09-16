@@ -91,6 +91,11 @@ export default function JlosmeScreen() {
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  // Popup from holding the toolbar's "+" button — lets it jump straight
+  // into the explicit "new-node"/"new-way" modes instead of the unified
+  // "add" mode's single-tap-then-decide flow (see toggleMode/handleAddPress
+  // below and EditorMode's own comment in OsmEditorMap).
+  const [showAddMenu, setShowAddMenu] = useState(false);
   // Progress/state for the two AI-assisted tracing tools (see
   // aiTraceTypes.ts) — OsmEditorMap.web.tsx reports into this so the mode
   // banner can show the right text/buttons without knowing how tracing
@@ -161,6 +166,12 @@ export default function JlosmeScreen() {
   useEffect(() => {
     setDeleteArmed(false);
   }, [selectedKey]);
+
+  // Any mode change dismisses the "+" quick menu — the escape hatch for
+  // opening it by accident, since there's no dedicated close button.
+  useEffect(() => {
+    setShowAddMenu(false);
+  }, [mode]);
 
   useEffect(() => {
     if (!token) return;
@@ -384,6 +395,11 @@ export default function JlosmeScreen() {
       }
       const el = await api.createOsmEditorElement(baseUrl, token, { type: "node", tags: {}, geometry: { lat, lon } });
       upsertElement(el);
+      // The unified "+" mode places a single pending point and commits it
+      // as a standalone node once finished — unlike the explicit
+      // "new-node" mode (repeat taps, stays active until Done), placing
+      // one node here is the whole job, so drop back to view.
+      setMode((m) => (m === "add" ? "view" : m));
     } catch (e) {
       setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not create node" });
     }
@@ -566,6 +582,18 @@ export default function JlosmeScreen() {
     setAiTraceStatus({ kind: "idle" });
   }
 
+  // The toolbar's single "+" button: not already adding → arm the unified
+  // "add" mode (tap the map for a pending point). Already in it → the
+  // button now means "finish" — commits whatever's pending as a node (one
+  // point) or a way (two or more), same as the mode banner's own Finish.
+  function handleAddPress() {
+    if (mode === "add") {
+      mapRef.current?.finishDraw();
+    } else {
+      toggleMode("add");
+    }
+  }
+
   const isAiTraceMode = mode === "ai-trace-building" || mode === "ai-trace-road" || mode === "ai-trace-stream";
   const aiTraceMessage = isAiTraceMode && aiTraceStatus.kind !== "idle" ? aiTraceStatus.message : null;
   const aiTraceBusy = isAiTraceMode && (aiTraceStatus.kind === "busy" || aiTraceStatus.kind === "loading-model");
@@ -580,17 +608,19 @@ export default function JlosmeScreen() {
   const modeBannerText =
     mode === "draw-boundary"
       ? "Tap the map to add boundary points, then Finish."
-      : mode === "new-way"
-        ? `Tap existing nodes or empty space to build a way, then Finish.${redrawSuffix}`
-        : mode === "new-node"
-          ? `Tap the map to add nodes.${redrawSuffix}`
-          : mode === "ai-trace-building"
-            ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
-            : mode === "ai-trace-road"
-              ? (aiTraceMessage ?? "Click a start point on the road, then more points along it, then Finish.")
-              : mode === "ai-trace-stream"
-                ? (aiTraceMessage ?? "Click a start point on the stream, then more points along it, then Finish. Uses lidar only — satellite can't see through tree canopy.")
-                : null;
+      : mode === "add"
+        ? "Tap the map to place a point. Tap + again to keep just that one node, or keep tapping to build a way — tap its highlighted starting point to close it into an area."
+        : mode === "new-way"
+          ? `Tap existing nodes or empty space to build a way, then Finish. Tap its highlighted starting point to close it into an area.${redrawSuffix}`
+          : mode === "new-node"
+            ? `Tap the map to add nodes.${redrawSuffix}`
+            : mode === "ai-trace-building"
+              ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
+              : mode === "ai-trace-road"
+                ? (aiTraceMessage ?? "Click a start point on the road, then more points along it, then Finish.")
+                : mode === "ai-trace-stream"
+                  ? (aiTraceMessage ?? "Click a start point on the stream, then more points along it, then Finish. Uses lidar only — satellite can't see through tree canopy.")
+                  : null;
 
   return (
     <View style={styles.container}>
@@ -647,7 +677,7 @@ export default function JlosmeScreen() {
             </View>
           </View>
         ) : null}
-        {mode === "new-way" && Platform.OS !== "web" ? (
+        {(mode === "new-way" || mode === "add") && Platform.OS !== "web" ? (
           <Text style={styles.nativeWayHint}>Tip: freeform way drawing is easiest on web.</Text>
         ) : null}
 
@@ -685,17 +715,29 @@ export default function JlosmeScreen() {
           <TouchableOpacity style={styles.toolbarButton} onPress={handleDownloadVisibleArea}>
             <Text style={styles.toolbarButtonText}>Download view</Text>
           </TouchableOpacity>
+          {/* Single add button: tap places a point, tap again to keep it
+              as one node or keep tapping to grow it into a way/area (see
+              handleAddPress/EditorMode's "add"). Hold it for a quick menu
+              straight into the explicit node-only/way-only modes. */}
           <TouchableOpacity
-            style={[styles.toolbarButton, mode === "new-node" && styles.toolbarButtonActive]}
-            onPress={() => toggleMode("new-node")}
+            style={[
+              styles.toolbarButton,
+              styles.addButton,
+              (mode === "add" || mode === "new-node" || mode === "new-way") && styles.toolbarButtonActive,
+            ]}
+            onPress={handleAddPress}
+            onLongPress={() => setShowAddMenu(true)}
+            delayLongPress={400}
           >
-            <Text style={styles.toolbarButtonText}>New node</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.toolbarButton, mode === "new-way" && styles.toolbarButtonActive]}
-            onPress={() => toggleMode("new-way")}
-          >
-            <Text style={styles.toolbarButtonText}>New way</Text>
+            <Text
+              style={[
+                styles.toolbarButtonText,
+                styles.addButtonText,
+                (mode === "add" || mode === "new-node" || mode === "new-way") && styles.toolbarButtonTextActive,
+              ]}
+            >
+              +
+            </Text>
           </TouchableOpacity>
           {/* AI-assisted tracing — web only (Leaflet + onnxruntime-web +
               canvas pixel access), same web/native asymmetry as the native
@@ -742,6 +784,33 @@ export default function JlosmeScreen() {
             <Text style={[styles.toolbarButtonText, showToolsMenu && styles.toolbarButtonTextActive]}>⚙️</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Holding "+" gives direct access to the explicit modes it
+            otherwise merges away — "new-node" for repeated standalone taps,
+            "new-way" to start the multi-tap way/area flow immediately
+            without the single-tap-then-decide ambiguity. */}
+        {showAddMenu ? (
+          <View style={styles.addMenu}>
+            <TouchableOpacity
+              style={styles.toolsMenuItem}
+              onPress={() => {
+                toggleMode("new-node");
+                setShowAddMenu(false);
+              }}
+            >
+              <Text style={styles.toolsMenuItemText}>📍 Add node</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.toolsMenuItem}
+              onPress={() => {
+                toggleMode("new-way");
+                setShowAddMenu(false);
+              }}
+            >
+              <Text style={styles.toolsMenuItemText}>🛣️ Add way / area</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {showToolsMenu ? (
           <View style={styles.toolsMenu}>
@@ -1177,10 +1246,23 @@ const styles = StyleSheet.create({
   toolbarButtonDangerText: { color: "#c0392b" },
   toolbarButtonText: { fontFamily: fonts.medium, fontSize: 12, color: "#333" },
   toolbarButtonTextActive: { color: "#fff" },
+  addButton: { paddingHorizontal: 16 },
+  addButtonText: { fontSize: 18, lineHeight: 18, fontFamily: fonts.medium },
   toolsMenu: {
     position: "absolute",
     right: 12,
     bottom: 68, // clears the toolbar's own height, opens upward from the gear button
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 4,
+    minWidth: 190,
+    elevation: 6,
+    zIndex: 1001,
+  },
+  addMenu: {
+    position: "absolute",
+    left: 12,
+    bottom: 68, // same idea as toolsMenu, opening upward from the "+" button instead
     backgroundColor: "#fff",
     borderRadius: 10,
     paddingVertical: 4,
