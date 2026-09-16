@@ -67,6 +67,12 @@ interface OsmEditorMapProps {
   showLidar: boolean;
   lidarOpacity: number;
   initialRegion?: { latitude: number; longitude: number };
+  // Original node positions of whichever way is currently armed for a
+  // Save-ID redraw (see JlosmeScreen's savedRedrawIds) — rendered as small
+  // non-interactive guide markers so the freshly drawn shape can visually
+  // line up with the one it's replacing. Null/undefined outside a way
+  // redraw.
+  redrawGuide?: { id: number; lat: number; lon: number }[] | null;
 }
 
 export interface OsmEditorMapHandle {
@@ -146,6 +152,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     showLidar,
     lidarOpacity,
     initialRegion,
+    redrawGuide,
   },
   ref
 ) {
@@ -340,6 +347,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           );
         })}
 
+      {(redrawGuide ?? []).map((p) => (
+        // Ghost guide marker at a redrawn way's original node position —
+        // purely visual (no press handler), a reference for lining the new
+        // shape up with the old one rather than an auto-snap.
+        <Marker key={`redraw-guide-${p.id}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }} opacity={0.85}>
+          <View style={styles.redrawGuideDot} />
+        </Marker>
+      ))}
+
       {draftPoints.length >= 2 ? (
         <Polyline
           coordinates={draftPoints.map((p) => ({ latitude: p.lat, longitude: p.lon }))}
@@ -363,4 +379,12 @@ const styles = StyleSheet.create({
   nodeDot: { borderWidth: 1.5 },
   nodeBadge: { backgroundColor: "#fff", borderWidth: 2, alignItems: "center", justifyContent: "center" },
   draftDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: "#fff" },
+  redrawGuideDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#9b59b6",
+    backgroundColor: "#fff",
+  },
 });

@@ -36,6 +36,23 @@ import {
 import { useDebouncedTagsDraft } from "../utils/useDebouncedTagsDraft";
 import { squareWayNodes } from "../utils/squareWay";
 
+// One parked "Save ID" entry (see savedRedrawIds below). Way-only fields:
+// nodeSnapshot is the original constituent nodes' positions (in order,
+// deduplicated) for the ghost-guide overlay shown while redrawing, and
+// exclusiveNodeIds is the subset of those not shared with any other way
+// still in the working set — those are the ones actually hidden/parked
+// alongside the way itself. A shared node (a road intersection, say) is
+// deliberately left off both: it stays visible and tappable so redrawing
+// one of the two ways can reconnect to it normally, the same as any other
+// existing node.
+type SavedRedrawRecord = {
+  type: "node" | "way";
+  id: number;
+  label: string;
+  nodeSnapshot?: { id: number; lat: number; lon: number }[];
+  exclusiveNodeIds?: number[];
+};
+
 // The tab is labeled "JLOSME" in the UI (the user's own chosen name) even
 // though every internal file/component uses plain descriptive names — this
 // screen, its map, and its helpers are all just "the OSM editor" in code.
@@ -81,7 +98,7 @@ export default function JlosmeScreen() {
   // it to that same id (a modify) instead of delete-then-recreate, which
   // would break its OSM edit history (see osmEditorUpload.ts). Persisted
   // so a parked id survives a restart before it's redrawn.
-  const [savedRedrawIds, setSavedRedrawIds] = useState<{ type: "node" | "way"; id: number; label: string }[]>([]);
+  const [savedRedrawIds, setSavedRedrawIds] = useState<SavedRedrawRecord[]>([]);
   // The one entry from the list above currently "loaded" — the next
   // new-node placement or new-way finish (including any AI trace tool,
   // since they all funnel through the same finish handlers) re-attaches to
@@ -103,18 +120,38 @@ export default function JlosmeScreen() {
     jlosmeSavedRedrawIdsStorage.set(JSON.stringify(savedRedrawIds));
   }, [savedRedrawIds]);
 
-  const savedRedrawKeys = useMemo(
-    () => new Set(savedRedrawIds.map((r) => osmEditorElementKey(r.type, r.id))),
-    [savedRedrawIds]
-  );
-  // What the map actually renders — a saved-for-redraw element stays in
-  // `elements` (its real id/version/tags are still needed to reattach the
-  // redrawn geometry later) but disappears from the map itself, which is
-  // the whole point: a clean slate to draw its replacement into.
+  // Every element key currently hidden from the map — each saved way/node
+  // itself, plus (for a saved way) any exclusiveNodeIds it parked alongside
+  // it. A node shared with another still-visible way is never in here.
+  const hiddenElementKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const r of savedRedrawIds) {
+      keys.add(osmEditorElementKey(r.type, r.id));
+      for (const nid of r.exclusiveNodeIds ?? []) keys.add(osmEditorElementKey("node", nid));
+    }
+    return keys;
+  }, [savedRedrawIds]);
+  // What the map actually renders — a saved-for-redraw element (and its
+  // parked exclusive sub-nodes) stay in `elements` (their real ids/
+  // versions/tags are still needed to reattach the redrawn geometry later,
+  // or to just un-park them again) but disappear from the map itself,
+  // which is the whole point: a clean slate to draw the replacement into.
   const mapElements = useMemo(
-    () => elements.filter((el) => !savedRedrawKeys.has(osmEditorElementKey(el.type, el.id))),
-    [elements, savedRedrawKeys]
+    () => elements.filter((el) => !hiddenElementKeys.has(osmEditorElementKey(el.type, el.id))),
+    [elements, hiddenElementKeys]
   );
+  // The armed entry's full record (not just its type/id) — looked up
+  // freshly rather than carried on armedRedrawId itself so its
+  // nodeSnapshot/exclusiveNodeIds are always current with savedRedrawIds.
+  const armedRedrawRecord = useMemo(
+    () => (armedRedrawId ? (savedRedrawIds.find((r) => r.type === armedRedrawId.type && r.id === armedRedrawId.id) ?? null) : null),
+    [armedRedrawId, savedRedrawIds]
+  );
+  // Ghost markers at the original way's node positions, shown while a way
+  // redraw is armed — a visual reference so the new taps can naturally line
+  // up with the old layout (the first new node landing back where the first
+  // old one was, etc.) rather than any literal auto-snapping.
+  const redrawGuide = armedRedrawRecord?.nodeSnapshot ?? null;
 
   useEffect(() => {
     setDeleteArmed(false);
@@ -184,7 +221,27 @@ export default function JlosmeScreen() {
     // keeps TypeScript's narrowing of type to "node" | "way".
     const { type, id } = selectedElement;
     const label = elementDisplayName(selectedElement);
-    setSavedRedrawIds((prev) => [...prev, { type, id, label }]);
+    let nodeSnapshot: SavedRedrawRecord["nodeSnapshot"];
+    let exclusiveNodeIds: SavedRedrawRecord["exclusiveNodeIds"];
+    if (type === "way") {
+      const uniqueNodeIds = [...new Set(wayGeometry(selectedElement).nodeIds)];
+      // A node this way shares with another way still in the working set
+      // (a road intersection, a stop sign's node, etc.) must stay put and
+      // tappable — only nodes exclusive to this way get parked with it.
+      const sharedWithOtherWay = new Set<number>();
+      for (const el of elements) {
+        if (el.type !== "way" || el.id === id) continue;
+        for (const nid of wayGeometry(el).nodeIds) sharedWithOtherWay.add(nid);
+      }
+      nodeSnapshot = [];
+      exclusiveNodeIds = [];
+      for (const nid of uniqueNodeIds) {
+        const node = elements.find((el) => el.type === "node" && el.id === nid);
+        if (node) nodeSnapshot.push({ id: nid, ...nodeGeometry(node) });
+        if (!sharedWithOtherWay.has(nid)) exclusiveNodeIds.push(nid);
+      }
+    }
+    setSavedRedrawIds((prev) => [...prev, { type, id, label, nodeSnapshot, exclusiveNodeIds }]);
     selectSingle(null);
   }
 
@@ -361,7 +418,16 @@ export default function JlosmeScreen() {
         const updated = await api.patchOsmEditorElement(baseUrl, token, "way", redrawingWay.id, { geometry: { nodeIds } });
         upsertElement(updated);
         selectSingle(osmEditorElementKey("way", redrawingWay.id));
+        const orphanedNodeIds = armedRedrawRecord?.exclusiveNodeIds ?? [];
         consumeArmedRedraw();
+        // The way's old exclusive sub-nodes (parked alongside it, see
+        // saveIdForRedraw) were only hidden in case the redraw got
+        // cancelled — now that it's actually gone through, the way no
+        // longer references them at all, so they're genuinely orphaned and
+        // can be deleted for real rather than left as invisible clutter.
+        for (const nid of orphanedNodeIds) {
+          await deleteElement("node", nid);
+        }
         return;
       }
       const way = await api.createOsmEditorElement(baseUrl, token, { type: "way", tags: {}, geometry: { nodeIds } });
@@ -524,6 +590,7 @@ export default function JlosmeScreen() {
           baseLayer={baseLayer}
           showLidar={showLidar}
           lidarOpacity={lidarOpacity}
+          redrawGuide={redrawGuide}
         />
 
         {loading ? (
@@ -870,7 +937,9 @@ export default function JlosmeScreen() {
             <Text style={styles.savedIdsHint}>
               Parked from a way/node's detail panel ("Save ID") — pick one, then draw its replacement on the map. The new
               shape reattaches to this same id, so its OSM edit history carries forward instead of forking into a new
-              element.
+              element. A parked way's own (non-intersection) nodes are hidden along with it and shown as small guide
+              markers at their old positions while you redraw, so the new shape can line up the same way — a shared
+              intersection node stays put and tappable the whole time.
             </Text>
             <ScrollView style={styles.relationsList}>
               {savedRedrawIds.length === 0 ? <Text style={styles.emptyText}>Nothing parked for redraw yet.</Text> : null}
@@ -884,6 +953,9 @@ export default function JlosmeScreen() {
                       {armedRedrawId && armedRedrawId.type === r.type && armedRedrawId.id === r.id
                         ? "Loaded — draw its new shape"
                         : `Tap to draw a new ${r.type}`}
+                      {r.exclusiveNodeIds && r.exclusiveNodeIds.length > 0
+                        ? ` (+ ${r.exclusiveNodeIds.length} sub-node${r.exclusiveNodeIds.length === 1 ? "" : "s"} parked with it)`
+                        : ""}
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => restoreSavedRedrawId(r)} hitSlop={8}>

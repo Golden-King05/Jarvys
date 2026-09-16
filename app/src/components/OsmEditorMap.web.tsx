@@ -92,6 +92,12 @@ interface OsmEditorMapProps {
   showLidar: boolean;
   lidarOpacity: number;
   initialRegion?: { latitude: number; longitude: number };
+  // Original node positions of whichever way is currently armed for a
+  // Save-ID redraw (see JlosmeScreen's savedRedrawIds) — rendered as small
+  // non-interactive numbered guide markers so the freshly drawn shape can
+  // visually line up with the one it's replacing. Null/undefined outside a
+  // way redraw.
+  redrawGuide?: { id: number; lat: number; lon: number }[] | null;
 }
 
 export interface OsmEditorMapHandle {
@@ -248,6 +254,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     showLidar,
     lidarOpacity,
     initialRegion,
+    redrawGuide,
   },
   ref
 ) {
@@ -820,9 +827,29 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           onNodeDragEndRef.current(el.id, lat, lng);
         });
       }
+
+      // Ghost guide markers — original positions of the way currently armed
+      // for a Save-ID redraw (see JlosmeScreen), drawn last so they sit on
+      // top. Purely visual (no click handler, not draggable): a reference
+      // for lining the new shape up with the old one, not an auto-snap.
+      if (redrawGuide) {
+        redrawGuide.forEach((p, i) => {
+          L.circleMarker([p.lat, p.lon], {
+            radius: 6,
+            color: "#9b59b6",
+            weight: 2,
+            dashArray: "2 2",
+            fillColor: "#fff",
+            fillOpacity: 0.85,
+            interactive: false,
+          })
+            .addTo(layer)
+            .bindTooltip(String(i + 1), { permanent: true, direction: "top", offset: [0, -6], className: "redraw-guide-label" });
+        });
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements, selectedKey, nodesById, zoomTick]);
+  }, [elements, selectedKey, nodesById, zoomTick, redrawGuide]);
 
   useImperativeHandle(ref, () => ({
     finishDraw,
