@@ -1,4 +1,4 @@
-import React, { useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { OsmEditorElement } from "../api";
 import { bingTileUrl, BING_ATTRIBUTION, getBingMapsKey, isBingConfigured } from "../utils/bingImagery";
 import { OSM_ATTRIBUTION, OSM_TILE_URL, SATELLITE_ATTRIBUTION, SATELLITE_TILE_URL } from "../utils/baseLayer";
@@ -7,6 +7,7 @@ import {
   areaFillColor,
   nodeGeometry,
   nodeIconGlyph,
+  nodeVisibilityAtZoom,
   osmEditorElementKey,
   pointToSegmentDistance,
   wayGeometry,
@@ -113,16 +114,18 @@ function actionColor(action: OsmEditorElement["action"]): string {
 // Fill color for a selected default (no-preset) node square — see nodeIcon.
 const SELECTED_NODE_FILL = "#e67e22";
 
-function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<string, string>) {
+function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<string, string>, zoom: number) {
+  const { scale, opacity } = nodeVisibilityAtZoom(zoom);
   const glyph = nodeIconGlyph(tags);
   if (glyph) {
     // A recognized preset gets its OSM-wiki emoji in a small white badge —
     // the action color moves to the badge's ring so edit-state is still
     // visible without fighting the icon itself for attention.
-    const size = selected ? 26 : 20;
-    const border = selected ? "3px solid #fff" : "2px solid #fff";
+    const size = Math.round((selected ? 26 : 20) * scale);
+    const borderWidth = Math.max(1, Math.round((selected ? 3 : 2) * scale));
+    const outlineWidth = Math.max(1, Math.round(2 * scale));
     return L.divIcon({
-      html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#fff;border:${border};outline:2px solid ${color};box-shadow:0 0 3px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;font-size:${Math.round(size * 0.62)}px;line-height:1;transform:translate(-50%,-50%)">${glyph}</div>`,
+      html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#fff;border:${borderWidth}px solid #fff;outline:${outlineWidth}px solid ${color};box-shadow:0 0 3px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;font-size:${Math.round(size * 0.62)}px;line-height:1;opacity:${opacity};transform:translate(-50%,-50%)">${glyph}</div>`,
       className: "",
       iconSize: [0, 0],
     });
@@ -132,10 +135,11 @@ function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<str
   // compete with the ones that do have a preset match. Hollow (just the
   // action-colored outline) until selected, at which point it fills solid
   // orange so the current selection stands out from the rest.
-  const size = selected ? 11 : 7;
+  const size = Math.max(1, Math.round((selected ? 11 : 7) * scale));
   const fill = selected ? SELECTED_NODE_FILL : "transparent";
+  const borderWidth = Math.max(1, 1.5 * scale);
   return L.divIcon({
-    html: `<div style="width:${size}px;height:${size}px;background:${fill};border:1.5px solid ${color};box-shadow:0 0 2px rgba(0,0,0,0.4);transform:translate(-50%,-50%)"></div>`,
+    html: `<div style="width:${size}px;height:${size}px;background:${fill};border:${borderWidth}px solid ${color};box-shadow:0 0 2px rgba(0,0,0,0.4);opacity:${opacity};transform:translate(-50%,-50%)"></div>`,
     className: "",
     iconSize: [0, 0],
   });
@@ -249,6 +253,11 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<Leaflet>(null);
+  // Bumped on every 'zoomend' purely to re-trigger the node/way render
+  // effect below — node marker size/opacity depend on the current zoom
+  // (see nodeIcon), but that effect otherwise only depends on elements/
+  // selection state, which don't change just from zooming.
+  const [zoomTick, setZoomTick] = useState(0);
   const elementsLayerRef = useRef<Leaflet>(null);
   const draftLayerRef = useRef<Leaflet>(null);
   const aiDraftLayerRef = useRef<Leaflet>(null);
@@ -630,6 +639,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       map.on("movestart zoomstart", () => {
         samCacheRef.current = null;
       });
+      map.on("zoomend", () => setZoomTick((n) => n + 1));
       mapInstance.current = map;
       elementsLayerRef.current = L.layerGroup().addTo(map);
       draftLayerRef.current = L.layerGroup().addTo(map);
@@ -721,6 +731,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       const layer = elementsLayerRef.current;
       if (!layer) return;
       layer.clearLayers();
+      const zoom = mapInstance.current?.getZoom() ?? 18;
 
       for (const el of elements) {
         const key = osmEditorElementKey(el.type, el.id);
@@ -794,7 +805,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         const selected = key === selectedKey;
         const geom = el.geometry as { lat: number; lon: number };
         const marker = L.marker([geom.lat, geom.lon], {
-          icon: nodeIcon(L, actionColor(el.action), selected, el.tags),
+          icon: nodeIcon(L, actionColor(el.action), selected, el.tags, zoom),
           draggable: true,
         }).addTo(layer);
         marker.on("click", (e: { originalEvent: Event; containerPoint: { x: number; y: number } }) => {
@@ -811,7 +822,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elements, selectedKey, nodesById]);
+  }, [elements, selectedKey, nodesById, zoomTick]);
 
   useImperativeHandle(ref, () => ({
     finishDraw,

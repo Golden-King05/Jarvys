@@ -3,7 +3,16 @@ import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import type { OsmEditorElement } from "../api";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
-import { areaFillColor, nodeGeometry, nodeIconGlyph, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
+import {
+  areaFillColor,
+  nodeGeometry,
+  nodeIconGlyph,
+  nodeVisibilityAtZoom,
+  osmEditorElementKey,
+  wayGeometry,
+  wayLatLngs,
+  wayLooksAreal,
+} from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 
@@ -185,6 +194,13 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 
   const draftColor = mode === "draw-boundary" ? "#8e44ad" : "#16a085";
 
+  // Approximate Leaflet-style zoom level derived from the region's own
+  // span (log2(360°/span), the standard web-mercator tile relationship) —
+  // react-native-maps doesn't expose a zoom number directly, only the
+  // lat/lon deltas. Feeds nodeVisibilityAtZoom (see the node marker
+  // rendering below) so node markers shrink/fade out at low zoom here too.
+  const [zoom, setZoom] = useState(() => Math.log2(360 / (initialRegion ? 0.05 : DEFAULT_REGION.longitudeDelta)));
+
   return (
     <MapView
       ref={mapRef}
@@ -193,6 +209,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       mapType={baseLayer === "satellite" ? "satellite" : "standard"}
       initialRegion={initialRegion ? { ...initialRegion, latitudeDelta: 0.05, longitudeDelta: 0.05 } : DEFAULT_REGION}
       onPress={(e) => handleMapPress(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
+      onRegionChangeComplete={(region) => setZoom(Math.log2(360 / region.longitudeDelta))}
       // Same reasoning as the web map's MAP_MAX_ZOOM — precise editing
       // benefits from zooming in past whatever the imagery itself supports.
       // The underlying platform map SDK (Apple/Google Maps) has its own
@@ -260,12 +277,14 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const selected = osmEditorElementKey("node", el.id) === selectedKey;
           const glyph = nodeIconGlyph(el.tags);
           const color = actionColor(el.action);
+          const { scale, opacity } = nodeVisibilityAtZoom(zoom);
           return (
             <Marker
               key={`node-${el.id}`}
               coordinate={{ latitude: g.lat, longitude: g.lon }}
               draggable
               anchor={{ x: 0.5, y: 0.5 }}
+              opacity={opacity}
               onPress={() => handleNodePress(el.id, g.lat, g.lon)}
               onDragEnd={(e) => onNodeDragEnd(el.id, e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
             >
@@ -276,10 +295,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 <View
                   style={[
                     styles.nodeBadge,
-                    { borderColor: color, width: selected ? 26 : 20, height: selected ? 26 : 20, borderRadius: selected ? 13 : 10 },
+                    {
+                      borderColor: color,
+                      width: Math.round((selected ? 26 : 20) * scale),
+                      height: Math.round((selected ? 26 : 20) * scale),
+                      borderRadius: Math.round((selected ? 13 : 10) * scale),
+                    },
                   ]}
                 >
-                  <Text style={{ fontSize: selected ? 16 : 12 }}>{glyph}</Text>
+                  <Text style={{ fontSize: Math.round((selected ? 16 : 12) * scale) }}>{glyph}</Text>
                 </View>
               ) : (
                 // No recognized preset — JOSM's own default node look is a
@@ -292,8 +316,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                     {
                       borderColor: color,
                       backgroundColor: selected ? SELECTED_NODE_FILL : "transparent",
-                      width: selected ? 11 : 7,
-                      height: selected ? 11 : 7,
+                      width: Math.max(1, Math.round((selected ? 11 : 7) * scale)),
+                      height: Math.max(1, Math.round((selected ? 11 : 7) * scale)),
                     },
                   ]}
                 />

@@ -463,6 +463,21 @@ export function nodeIconGlyph(tags: Record<string, string>): string | null {
   return NODE_ICON_RULES.find((rule) => rule.test(tags))?.icon ?? null;
 }
 
+// JOSM shrinks and fades node markers out at low zoom rather than keeping
+// them a constant screen size — a busy area reads as clutter at a glance,
+// and node-level precision isn't useful until you're zoomed in enough to
+// actually place/drag one anyway. Shared by both maps (OsmEditorMap.web.tsx
+// uses Leaflet's own zoom level directly; OsmEditorMap.tsx derives an
+// approximate one from the native MapView's region). Below
+// NODE_VISIBILITY_MIN_ZOOM markers bottom out at their smallest/faintest;
+// at or above NODE_VISIBILITY_FULL_ZOOM they're full size, linear between.
+const NODE_VISIBILITY_MIN_ZOOM = 11;
+const NODE_VISIBILITY_FULL_ZOOM = 18;
+export function nodeVisibilityAtZoom(zoom: number): { scale: number; opacity: number } {
+  const t = Math.max(0, Math.min(1, (zoom - NODE_VISIBILITY_MIN_ZOOM) / (NODE_VISIBILITY_FULL_ZOOM - NODE_VISIBILITY_MIN_ZOOM)));
+  return { scale: 0.3 + 0.7 * t, opacity: 0.45 + 0.55 * t };
+}
+
 // Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by) —
 // plain 2D math, usable in any consistent unit (screen pixels in
 // practice, for the click-candidate search in OsmEditorMap.web.tsx).
