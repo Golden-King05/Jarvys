@@ -47,6 +47,14 @@ export default function JlosmeScreen() {
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<EditorMode>("view");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // Every element a click/tap landed near, nearest first (see
+  // OsmEditorMap.web.tsx's selectAt) — lets the detail panel offer cycling
+  // through close-together or directly overlapping features (e.g. two
+  // areas tagged over the same spot) instead of only ever reaching
+  // whichever one happened to render on top. selectedKey is always
+  // selectionCandidates[selectionIndex] while candidates exist.
+  const [selectionCandidates, setSelectionCandidates] = useState<string[]>([]);
+  const [selectionIndex, setSelectionIndex] = useState(0);
   const [baseLayer, setBaseLayer] = useState<EditorBaseLayer>("osm");
   const [showLidar, setShowLidar] = useState(false);
   const [lidarOpacity, setLidarOpacity] = useState(0.7);
@@ -94,6 +102,35 @@ export default function JlosmeScreen() {
     () => elements.find((el) => osmEditorElementKey(el.type, el.id) === selectedKey) ?? null,
     [elements, selectedKey]
   );
+
+  // Selects exactly one known element (a fresh selection — a newly created
+  // way, a relation picked from its own list, or a full deselect) and
+  // drops any leftover candidate list from a previous ambiguous click.
+  function selectSingle(key: string | null) {
+    setSelectedKey(key);
+    setSelectionCandidates([]);
+    setSelectionIndex(0);
+  }
+
+  // The map's click-candidate callback — keys are nearest-to-the-click
+  // first; the closest one is selected immediately, with the rest (if any)
+  // available via the cycle arrows in the detail panel.
+  function handleSelectCandidates(keys: string[]) {
+    if (keys.length === 0) {
+      selectSingle(null);
+      return;
+    }
+    setSelectionCandidates(keys);
+    setSelectionIndex(0);
+    setSelectedKey(keys[0]);
+  }
+
+  function cycleSelection(delta: number) {
+    if (selectionCandidates.length < 2) return;
+    const next = (selectionIndex + delta + selectionCandidates.length) % selectionCandidates.length;
+    setSelectionIndex(next);
+    setSelectedKey(selectionCandidates[next]);
+  }
   // A local, debounced draft of the selected node/way's tags — see
   // useDebouncedTagsDraft for why this can't just be a straight PATCH per
   // keystroke.
@@ -226,7 +263,7 @@ export default function JlosmeScreen() {
       }
       const way = await api.createOsmEditorElement(baseUrl, token, { type: "way", tags: {}, geometry: { nodeIds } });
       upsertElement(way);
-      setSelectedKey(osmEditorElementKey("way", way.id));
+      selectSingle(osmEditorElementKey("way", way.id));
     } catch (e) {
       setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not create way" });
     } finally {
@@ -319,7 +356,7 @@ export default function JlosmeScreen() {
       } else {
         setElements((prev) => prev.map((el) => (el.type === type && el.id === id ? { ...el, action: "delete" } : el)));
       }
-      if (osmEditorElementKey(type, id) === selectedKey) setSelectedKey(null);
+      if (osmEditorElementKey(type, id) === selectedKey) selectSingle(null);
     } catch (e) {
       setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not delete" });
     }
@@ -329,14 +366,14 @@ export default function JlosmeScreen() {
     if (!token) return;
     await api.clearOsmEditorWorkingSet(baseUrl, token);
     setElements([]);
-    setSelectedKey(null);
+    selectSingle(null);
     setClearArmed(false);
     setShowImagery(false);
   }
 
   function toggleMode(next: EditorMode) {
     setMode((cur) => (cur === next ? "view" : next));
-    setSelectedKey(null);
+    selectSingle(null);
     setAiTraceStatus({ kind: "idle" });
   }
 
@@ -367,7 +404,7 @@ export default function JlosmeScreen() {
           ref={mapRef}
           elements={elements}
           selectedKey={selectedKey}
-          onSelect={setSelectedKey}
+          onSelectCandidates={handleSelectCandidates}
           mode={mode}
           onBoundaryFinish={handleBoundaryFinish}
           onWayFinish={handleWayFinish}
@@ -560,17 +597,35 @@ export default function JlosmeScreen() {
         visible={Boolean(selectedElement) && selectedElement?.type !== "relation"}
         transparent
         animationType="fade"
-        onRequestClose={() => setSelectedKey(null)}
+        onRequestClose={() => selectSingle(null)}
       >
         <View style={styles.overlay}>
           <View style={styles.card}>
             {selectedElement ? (
               <ScrollView>
+                {selectionCandidates.length > 1 ? (
+                  // The click landed near/on more than one feature (close
+                  // together, or directly overlapping — e.g. an island
+                  // tagged both swamp and intermittent-water needs two
+                  // stacked areas) — step through the rest without having
+                  // to close and re-click precisely on each one.
+                  <View style={styles.candidateNav}>
+                    <TouchableOpacity onPress={() => cycleSelection(-1)} hitSlop={8}>
+                      <Text style={styles.candidateNavArrow}>◀</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.candidateNavLabel}>
+                      {selectionIndex + 1} of {selectionCandidates.length} nearby
+                    </Text>
+                    <TouchableOpacity onPress={() => cycleSelection(1)} hitSlop={8}>
+                      <Text style={styles.candidateNavArrow}>▶</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardTitle}>
                     {selectedElement.type} #{selectedElement.id}
                   </Text>
-                  <TouchableOpacity onPress={() => setSelectedKey(null)} hitSlop={8}>
+                  <TouchableOpacity onPress={() => selectSingle(null)} hitSlop={8}>
                     <Text style={styles.closeIcon}>✕</Text>
                   </TouchableOpacity>
                 </View>
@@ -606,7 +661,7 @@ export default function JlosmeScreen() {
         visible={Boolean(selectedElement) && selectedElement?.type === "relation"}
         transparent
         animationType="fade"
-        onRequestClose={() => setSelectedKey(null)}
+        onRequestClose={() => selectSingle(null)}
       >
         <View style={styles.overlay}>
           <View style={styles.card}>
@@ -618,7 +673,7 @@ export default function JlosmeScreen() {
                 suggestedKeys={suggestedKeys}
                 onPatch={(patch) => patchElement("relation", selectedElement.id, patch)}
                 onDelete={() => deleteElement("relation", selectedElement.id)}
-                onClose={() => setSelectedKey(null)}
+                onClose={() => selectSingle(null)}
               />
             ) : null}
           </View>
@@ -642,7 +697,7 @@ export default function JlosmeScreen() {
                   key={osmEditorElementKey("relation", r.id)}
                   style={styles.relationRow}
                   onPress={() => {
-                    setSelectedKey(osmEditorElementKey("relation", r.id));
+                    selectSingle(osmEditorElementKey("relation", r.id));
                     setShowRelations(false);
                   }}
                 >
@@ -660,7 +715,7 @@ export default function JlosmeScreen() {
                 const el = await api.createOsmEditorElement(baseUrl, token, { type: "relation", tags: {}, geometry: { members: [] } });
                 upsertElement(el);
                 setShowRelations(false);
-                setSelectedKey(osmEditorElementKey("relation", el.id));
+                selectSingle(osmEditorElementKey("relation", el.id));
               }}
             >
               <Text style={styles.newRelationButtonText}>+ New relation</Text>
@@ -912,6 +967,19 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontFamily: fonts.semiBold, fontSize: 16, color: "#222" },
   closeIcon: { fontFamily: fonts.medium, fontSize: 16, color: "#888" },
+  candidateNav: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    paddingTop: 12,
+    paddingBottom: 4,
+    backgroundColor: "#f7f9fb",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  candidateNavArrow: { fontFamily: fonts.semiBold, fontSize: 16, color: "#2980b9", paddingHorizontal: 6 },
+  candidateNavLabel: { fontFamily: fonts.medium, fontSize: 12, color: "#555" },
   actionBadge: { fontFamily: fonts.regular, fontSize: 11, color: "#888", paddingHorizontal: 16, marginBottom: 8 },
   deleteButton: {
     marginHorizontal: 16,

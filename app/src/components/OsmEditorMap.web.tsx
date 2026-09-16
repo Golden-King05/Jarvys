@@ -3,7 +3,16 @@ import type { OsmEditorElement } from "../api";
 import { bingTileUrl, BING_ATTRIBUTION, getBingMapsKey, isBingConfigured } from "../utils/bingImagery";
 import { OSM_ATTRIBUTION, OSM_TILE_URL, SATELLITE_ATTRIBUTION, SATELLITE_TILE_URL } from "../utils/baseLayer";
 import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
-import { areaFillColor, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
+import {
+  areaFillColor,
+  nodeGeometry,
+  nodeIconGlyph,
+  osmEditorElementKey,
+  pointToSegmentDistance,
+  wayGeometry,
+  wayLatLngs,
+  wayLooksAreal,
+} from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 import { captureMapRegion, type CapturedRegion } from "../utils/mapCapture";
@@ -58,7 +67,13 @@ export type WayDraftPoint = { existingId: number } | { lat: number; lon: number 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
   selectedKey: string | null;
-  onSelect: (key: string | null) => void;
+  // Fired on every click/tap-driven selection with every element within
+  // SELECT_TOLERANCE_PX of the click, nearest first, so the caller can
+  // offer cycling through close-together or directly overlapping features
+  // (e.g. two overlapping areas tagged over the same island) rather than
+  // only ever reaching whichever one happened to render on top. Empty
+  // array means the click hit nothing.
+  onSelectCandidates: (keys: string[]) => void;
   mode: EditorMode;
   onBoundaryFinish: (points: { lat: number; lon: number }[]) => void;
   // `closeLoop`: when true, the caller should close the way by reusing the
@@ -95,11 +110,27 @@ function actionColor(action: OsmEditorElement["action"]): string {
   return "#2980b9";
 }
 
-function nodeIcon(L: Leaflet, color: string, selected: boolean) {
-  const size = selected ? 14 : 9;
-  const border = selected ? "3px solid #fff" : "2px solid #fff";
+function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<string, string>) {
+  const glyph = nodeIconGlyph(tags);
+  if (glyph) {
+    // A recognized preset gets its OSM-wiki emoji in a small white badge —
+    // the action color moves to the badge's ring so edit-state is still
+    // visible without fighting the icon itself for attention.
+    const size = selected ? 26 : 20;
+    const border = selected ? "3px solid #fff" : "2px solid #fff";
+    return L.divIcon({
+      html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#fff;border:${border};outline:2px solid ${color};box-shadow:0 0 3px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;font-size:${Math.round(size * 0.62)}px;line-height:1;transform:translate(-50%,-50%)">${glyph}</div>`,
+      className: "",
+      iconSize: [0, 0],
+    });
+  }
+  // No recognized preset — JOSM's own default node look is a small, plain
+  // square rather than a bold circle, so an icon-less node doesn't visually
+  // compete with the ones that do have a preset match.
+  const size = selected ? 11 : 7;
+  const border = selected ? "2.5px solid #fff" : "1.5px solid #fff";
   return L.divIcon({
-    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:${border};box-shadow:0 0 3px rgba(0,0,0,0.5);transform:translate(-50%,-50%)"></div>`,
+    html: `<div style="width:${size}px;height:${size}px;background:${color};border:${border};box-shadow:0 0 2px rgba(0,0,0,0.4);transform:translate(-50%,-50%)"></div>`,
     className: "",
     iconSize: [0, 0],
   });
@@ -135,6 +166,10 @@ const MAP_MAX_ZOOM = 24;
 // Width, in screen pixels (fixed regardless of zoom), of the tinted border
 // band drawn around an area's outline — see the areal-way rendering below.
 const AREA_FILL_BAND_PX = 24;
+
+// How close (in screen pixels) a click needs to land to a node or way for
+// it to be offered as a selection candidate — see selectAt below.
+const SELECT_TOLERANCE_PX = 18;
 
 // Computes a hole ring, inset from `latlngs` by roughly `bandPx` screen
 // pixels, so a polygon-with-hole can tint only a band near the boundary
@@ -193,7 +228,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   {
     elements,
     selectedKey,
-    onSelect,
+    onSelectCandidates,
     mode,
     onBoundaryFinish,
     onWayFinish,
@@ -217,8 +252,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
+  const onSelectCandidatesRef = useRef(onSelectCandidates);
+  onSelectCandidatesRef.current = onSelectCandidates;
   const onBoundaryFinishRef = useRef(onBoundaryFinish);
   onBoundaryFinishRef.current = onBoundaryFinish;
   const onWayFinishRef = useRef(onWayFinish);
@@ -257,6 +292,51 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     for (const el of elements) if (el.type === "node") map.set(el.id, el);
     return map;
   }, [elements]);
+
+  // Read by selectAt, which runs from the map's own click handler — that
+  // handler is attached once at mount (see the map-init effect below), so
+  // it needs these read through a ref rather than closed over directly, the
+  // same reason mode/onSelectCandidates etc. above are refs too.
+  const elementsRef = useRef(elements);
+  elementsRef.current = elements;
+  const nodesByIdRef = useRef(nodesById);
+  nodesByIdRef.current = nodesById;
+
+  // Runs a click/tap through every node and way to find everything within
+  // SELECT_TOLERANCE_PX screen pixels, nearest first — used for every
+  // selection entry point (a direct shape click, a marker click, or empty
+  // map space near something) so overlapping or close-together features
+  // are always offered as a group rather than only ever reaching whichever
+  // one happened to render on top.
+  function selectAt(map: Leaflet, containerPoint: { x: number; y: number }) {
+    const scored: { key: string; dist: number }[] = [];
+    for (const el of elementsRef.current) {
+      if (el.type === "node") {
+        const g = nodeGeometry(el);
+        const p = map.latLngToContainerPoint([g.lat, g.lon]);
+        const dist = Math.hypot(containerPoint.x - p.x, containerPoint.y - p.y);
+        if (dist <= SELECT_TOLERANCE_PX) scored.push({ key: osmEditorElementKey("node", el.id), dist });
+      } else if (el.type === "way") {
+        const latlngs = wayLatLngs(el, nodesByIdRef.current);
+        if (latlngs.length < 2) continue;
+        const points = latlngs.map(([lat, lon]) => map.latLngToContainerPoint([lat, lon]));
+        let minDist = Infinity;
+        for (let i = 0; i < points.length - 1; i++) {
+          minDist = Math.min(
+            minDist,
+            pointToSegmentDistance(containerPoint.x, containerPoint.y, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y)
+          );
+        }
+        // Areal ways are only visually clickable within their tinted
+        // border band (see insetRingPx below) — measuring against the
+        // boundary segments the same way as a plain line keeps candidate
+        // search consistent with what's actually interactive on screen.
+        if (minDist <= SELECT_TOLERANCE_PX) scored.push({ key: osmEditorElementKey("way", el.id), dist: minDist });
+      }
+    }
+    scored.sort((a, b) => a.dist - b.dist);
+    onSelectCandidatesRef.current(scored.map((s) => s.key));
+  }
 
   function redrawDraft(L: Leaflet) {
     const layer = draftLayerRef.current;
@@ -471,18 +551,18 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       runBuildingTrace(L, mapInstance.current, { lat, lng: lon }, containerPoint);
     } else if (m === "ai-trace-road" || m === "ai-trace-stream") {
       runLineWaypoint(L, mapInstance.current, { lat, lng: lon }, m);
-    } else {
-      onSelectRef.current(null);
+    } else if (mapInstance.current) {
+      selectAt(mapInstance.current, containerPoint);
     }
   }
 
-  function handleNodeClick(L: Leaflet, id: number, lat: number, lon: number) {
+  function handleNodeClick(L: Leaflet, id: number, lat: number, lon: number, containerPoint: { x: number; y: number }) {
     if (modeRef.current === "new-way") {
       draftPoints.current = [...draftPoints.current, { lat, lon, existingId: id }];
       redrawDraft(L);
       return;
     }
-    onSelectRef.current(osmEditorElementKey("node", id));
+    if (mapInstance.current) selectAt(mapInstance.current, containerPoint);
   }
 
   function finishDraw() {
@@ -649,7 +729,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           const geom = wayGeometry(el);
           const closed = geom.nodeIds.length >= 2 && geom.nodeIds[0] === geom.nodeIds[geom.nodeIds.length - 1];
 
-          const handleShapeClick = (e: { originalEvent: Event }) => {
+          const handleShapeClick = (e: { originalEvent: Event; containerPoint: { x: number; y: number } }) => {
             // e.originalEvent.stopPropagation() alone only stops native DOM
             // bubbling — Leaflet fires its own map "click" separately by
             // walking each layer's _eventParents (see Layer#_propagateEvent),
@@ -657,7 +737,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // own click handler below still ran right after and deselected
             // whatever was just selected in the same tick.
             L.DomEvent.stopPropagation(e);
-            onSelectRef.current(key);
+            if (mapInstance.current) selectAt(mapInstance.current, e.containerPoint);
           };
 
           if (areal && closed) {
@@ -709,15 +789,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         const selected = key === selectedKey;
         const geom = el.geometry as { lat: number; lon: number };
         const marker = L.marker([geom.lat, geom.lon], {
-          icon: nodeIcon(L, actionColor(el.action), selected),
+          icon: nodeIcon(L, actionColor(el.action), selected, el.tags),
           draggable: true,
         }).addTo(layer);
-        marker.on("click", (e: { originalEvent: Event }) => {
+        marker.on("click", (e: { originalEvent: Event; containerPoint: { x: number; y: number } }) => {
           // Same Leaflet gotcha as the way/polygon click handler above —
           // native stopPropagation() doesn't stop Leaflet's own internal
           // event propagation to the map's click handler.
           L.DomEvent.stopPropagation(e);
-          handleNodeClick(L, el.id, geom.lat, geom.lon);
+          handleNodeClick(L, el.id, geom.lat, geom.lon, e.containerPoint);
         });
         marker.on("dragend", () => {
           const { lat, lng } = marker.getLatLng();

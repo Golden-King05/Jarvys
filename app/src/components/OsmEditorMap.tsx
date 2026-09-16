@@ -1,9 +1,9 @@
 import React, { useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import MapView, { Marker, Polygon, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import type { OsmEditorElement } from "../api";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
-import { areaFillColor, nodeGeometry, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
+import { areaFillColor, nodeGeometry, nodeIconGlyph, osmEditorElementKey, wayGeometry, wayLatLngs, wayLooksAreal } from "../utils/osmEditorGeometry";
 import type { LatLonBox } from "../utils/geoBox";
 import type { AiTraceStatus } from "../utils/aiTraceTypes";
 
@@ -35,7 +35,13 @@ export type WayDraftPoint = { existingId: number } | { lat: number; lon: number 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
   selectedKey: string | null;
-  onSelect: (key: string | null) => void;
+  // Fired on every tap/press selection. Unlike the web map
+  // (OsmEditorMap.web.tsx), this always reports a single-element list —
+  // react-native-maps doesn't reliably hand back the press's own map
+  // coordinate across every shape type/platform combination, so there's no
+  // solid way to search for nearby overlapping candidates here. JlosmeScreen's
+  // cycle-arrows UI simply has nothing to cycle through on native.
+  onSelectCandidates: (keys: string[]) => void;
   mode: EditorMode;
   onBoundaryFinish: (points: { lat: number; lon: number }[]) => void;
   onWayFinish: (points: WayDraftPoint[], closeLoop?: boolean) => void;
@@ -101,7 +107,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   {
     elements,
     selectedKey,
-    onSelect,
+    onSelectCandidates,
     mode,
     onBoundaryFinish,
     onWayFinish,
@@ -133,7 +139,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     } else if (mode === "new-node") {
       onCreateNode(lat, lon);
     } else {
-      onSelect(null);
+      onSelectCandidates([]);
     }
   }
 
@@ -142,7 +148,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       setDraftPoints((pts) => [...pts, { lat, lon, existingId: id }]);
       return;
     }
-    onSelect(osmEditorElementKey("node", id));
+    onSelectCandidates([osmEditorElementKey("node", id)]);
   }
 
   useImperativeHandle(
@@ -208,7 +214,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // fully hide the imagery underneath — see insetRingFraction
             // above for why this is a proportional inset rather than a
             // fixed-pixel one on native.
-            const onPress = () => onSelect(osmEditorElementKey("way", el.id));
+            const onPress = () => onSelectCandidates([osmEditorElementKey("way", el.id)]);
             const hole = insetRingFraction(latlngs, AREA_FILL_HOLE_FRACTION);
             return (
               <React.Fragment key={key}>
@@ -238,7 +244,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
               strokeColor={color}
               strokeWidth={selected ? 5 : 3}
               tappable
-              onPress={() => onSelect(osmEditorElementKey("way", el.id))}
+              onPress={() => onSelectCandidates([osmEditorElementKey("way", el.id)])}
             />
           );
         })}
@@ -248,6 +254,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
         .map((el) => {
           const g = nodeGeometry(el);
           const selected = osmEditorElementKey("node", el.id) === selectedKey;
+          const glyph = nodeIconGlyph(el.tags);
+          const color = actionColor(el.action);
           return (
             <Marker
               key={`node-${el.id}`}
@@ -257,17 +265,28 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
               onPress={() => handleNodePress(el.id, g.lat, g.lon)}
               onDragEnd={(e) => onNodeDragEnd(el.id, e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude)}
             >
-              <View
-                style={[
-                  styles.nodeDot,
-                  {
-                    backgroundColor: actionColor(el.action),
-                    width: selected ? 16 : 10,
-                    height: selected ? 16 : 10,
-                    borderRadius: selected ? 8 : 5,
-                  },
-                ]}
-              />
+              {glyph ? (
+                // A recognized preset gets its OSM-wiki emoji in a small
+                // white badge — the action color moves to the badge's ring
+                // so edit-state stays visible without fighting the icon.
+                <View
+                  style={[
+                    styles.nodeBadge,
+                    { borderColor: color, width: selected ? 26 : 20, height: selected ? 26 : 20, borderRadius: selected ? 13 : 10 },
+                  ]}
+                >
+                  <Text style={{ fontSize: selected ? 16 : 12 }}>{glyph}</Text>
+                </View>
+              ) : (
+                // No recognized preset — JOSM's own default node look is a
+                // small, plain square rather than a bold circle.
+                <View
+                  style={[
+                    styles.nodeDot,
+                    { backgroundColor: color, width: selected ? 11 : 7, height: selected ? 11 : 7 },
+                  ]}
+                />
+              )}
             </Marker>
           );
         })}
@@ -292,6 +311,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 export default OsmEditorMap;
 
 const styles = StyleSheet.create({
-  nodeDot: { borderWidth: 2, borderColor: "#fff" },
+  nodeDot: { borderWidth: 1.5, borderColor: "#fff" },
+  nodeBadge: { backgroundColor: "#fff", borderWidth: 2, alignItems: "center", justifyContent: "center" },
   draftDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: "#fff" },
 });

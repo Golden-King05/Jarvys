@@ -106,3 +106,119 @@ const AREA_FILL_DEFAULT = "#c4c4c4"; // no recognized area-type tag yet
 export function areaFillColor(tags: Record<string, string>): string {
   return AREA_FILL_RULES.find((rule) => rule.test(tags))?.color ?? AREA_FILL_DEFAULT;
 }
+
+// A curated (not exhaustive — OSM's real tag vocabulary runs into the
+// thousands) set of common node presets, each mapped to the emoji OSM's
+// own wiki uses to illustrate that feature, matching this app's existing
+// style of emoji-as-icon (the toolbar's own gear/map buttons) rather than
+// a bundled icon-sprite asset. Checked in priority order; a node without a
+// match here falls back to JOSM's own plain, unobtrusive default node
+// look (see nodeIcon in OsmEditorMap.web.tsx / OsmEditorMap.tsx) instead
+// of a made-up generic icon.
+const NODE_ICON_RULES: { test: (tags: Record<string, string>) => boolean; icon: string }[] = [
+  // Natural
+  { test: (t) => t.natural === "tree", icon: "🌳" },
+  { test: (t) => t.natural === "peak", icon: "🗻" },
+  { test: (t) => t.natural === "volcano", icon: "🌋" },
+  { test: (t) => t.natural === "spring", icon: "💧" },
+  { test: (t) => t.natural === "cave_entrance", icon: "🕳️" },
+  { test: (t) => t.natural === "beach", icon: "🏖️" },
+  { test: (t) => t.natural === "saddle" || t.natural === "cliff", icon: "⛰️" },
+  // Amenities
+  { test: (t) => t.amenity === "restaurant", icon: "🍽️" },
+  { test: (t) => t.amenity === "fast_food", icon: "🍔" },
+  { test: (t) => t.amenity === "cafe", icon: "☕" },
+  { test: (t) => t.amenity === "bar" || t.amenity === "pub", icon: "🍺" },
+  { test: (t) => t.amenity === "ice_cream", icon: "🍦" },
+  { test: (t) => t.amenity === "bank", icon: "🏦" },
+  { test: (t) => t.amenity === "atm", icon: "🏧" },
+  { test: (t) => t.amenity === "hospital", icon: "🏥" },
+  { test: (t) => t.amenity === "pharmacy", icon: "💊" },
+  { test: (t) => t.amenity === "dentist" || t.amenity === "clinic" || t.amenity === "doctors", icon: "⚕️" },
+  { test: (t) => t.amenity === "school", icon: "🏫" },
+  { test: (t) => t.amenity === "university" || t.amenity === "college", icon: "🎓" },
+  { test: (t) => t.amenity === "library", icon: "📚" },
+  { test: (t) => t.amenity === "fuel", icon: "⛽" },
+  { test: (t) => t.amenity === "charging_station", icon: "🔌" },
+  { test: (t) => t.amenity === "parking", icon: "🅿️" },
+  { test: (t) => t.amenity === "bicycle_parking" || t.amenity === "bicycle_rental", icon: "🚲" },
+  { test: (t) => t.amenity === "drinking_water", icon: "🚰" },
+  { test: (t) => t.amenity === "toilets", icon: "🚻" },
+  { test: (t) => t.amenity === "bench", icon: "🪑" },
+  { test: (t) => t.amenity === "waste_basket", icon: "🗑️" },
+  { test: (t) => t.amenity === "place_of_worship", icon: "⛪" },
+  { test: (t) => t.amenity === "fire_station", icon: "🚒" },
+  { test: (t) => t.amenity === "police", icon: "🚓" },
+  { test: (t) => t.amenity === "post_office" || t.amenity === "post_box", icon: "📮" },
+  { test: (t) => t.amenity === "theatre", icon: "🎭" },
+  { test: (t) => t.amenity === "cinema", icon: "🎬" },
+  { test: (t) => t.amenity === "recycling", icon: "♻️" },
+  { test: (t) => t.amenity === "car_wash", icon: "🚗" },
+  { test: (t) => t.amenity === "telephone", icon: "☎️" },
+  { test: (t) => t.amenity === "kindergarten", icon: "🧸" },
+  // Shops
+  { test: (t) => t.shop === "supermarket", icon: "🛒" },
+  { test: (t) => t.shop === "bakery", icon: "🥖" },
+  { test: (t) => t.shop === "butcher", icon: "🥩" },
+  { test: (t) => t.shop === "clothes", icon: "👕" },
+  { test: (t) => t.shop === "hairdresser", icon: "💇" },
+  { test: (t) => t.shop === "books", icon: "📚" },
+  { test: (t) => t.shop === "convenience", icon: "🏪" },
+  { test: (t) => t.shop === "florist", icon: "💐" },
+  { test: (t) => t.shop !== undefined, icon: "🏬" }, // any other shop=* — generic storefront
+  // Tourism
+  { test: (t) => t.tourism === "hotel" || t.tourism === "guest_house" || t.tourism === "motel", icon: "🏨" },
+  { test: (t) => t.tourism === "museum", icon: "🏛️" },
+  { test: (t) => t.tourism === "attraction", icon: "🎡" },
+  { test: (t) => t.tourism === "viewpoint", icon: "🔭" },
+  { test: (t) => t.tourism === "camp_site", icon: "🏕️" },
+  { test: (t) => t.tourism === "picnic_site", icon: "🧺" },
+  { test: (t) => t.tourism === "artwork", icon: "🖼️" },
+  { test: (t) => t.tourism === "information", icon: "ℹ️" },
+  // Historic
+  { test: (t) => t.historic === "monument" || t.historic === "memorial", icon: "🗿" },
+  { test: (t) => t.historic === "castle", icon: "🏰" },
+  { test: (t) => t.historic === "ruins", icon: "🏛️" },
+  // Leisure
+  { test: (t) => t.leisure === "playground", icon: "🛝" },
+  { test: (t) => t.leisure === "swimming_pool", icon: "🏊" },
+  { test: (t) => t.leisure === "sports_centre" || t.leisure === "pitch" || t.leisure === "stadium", icon: "⚽" },
+  { test: (t) => t.leisure === "golf_course", icon: "⛳" },
+  { test: (t) => t.leisure === "fitness_centre", icon: "🏋️" },
+  // Man-made / infrastructure / transport
+  { test: (t) => t.man_made === "tower", icon: "🗼" },
+  { test: (t) => t.man_made === "lighthouse", icon: "🚨" },
+  { test: (t) => t.man_made === "water_well" || t.man_made === "water_tower" || t.man_made === "water_tap", icon: "💧" },
+  { test: (t) => t.man_made === "windmill", icon: "🎡" },
+  { test: (t) => t.man_made === "communications_tower", icon: "📡" },
+  { test: (t) => t.railway === "station" || t.railway === "halt" || t.railway === "tram_stop", icon: "🚉" },
+  { test: (t) => t.railway === "level_crossing", icon: "🚦" },
+  { test: (t) => t.aeroway === "aerodrome", icon: "✈️" },
+  { test: (t) => t.highway === "bus_stop", icon: "🚌" },
+  { test: (t) => t.highway === "traffic_signals", icon: "🚦" },
+  { test: (t) => t.highway === "crossing", icon: "🚸" },
+  { test: (t) => t.barrier === "gate" || t.barrier === "lift_gate" || t.barrier === "bollard", icon: "🚧" },
+  { test: (t) => t.power === "tower" || t.power === "pole" || t.power === "generator", icon: "⚡" },
+  { test: (t) => t.emergency === "defibrillator", icon: "🫀" },
+  { test: (t) => t.emergency !== undefined, icon: "🚑" },
+];
+
+// Returns the OSM-wiki-style emoji for a node's tags, or null when nothing
+// matches — the caller then falls back to a plain, unobtrusive marker
+// (this app's version of JOSM's own default node rendering) rather than a
+// made-up generic icon.
+export function nodeIconGlyph(tags: Record<string, string>): string | null {
+  return NODE_ICON_RULES.find((rule) => rule.test(tags))?.icon ?? null;
+}
+
+// Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by) —
+// plain 2D math, usable in any consistent unit (screen pixels in
+// practice, for the click-candidate search in OsmEditorMap.web.tsx).
+export function pointToSegmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
