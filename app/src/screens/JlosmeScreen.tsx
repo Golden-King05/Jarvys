@@ -577,7 +577,7 @@ export default function JlosmeScreen() {
               onBlur={() => setClearArmed(false)}
             >
               <Text style={[styles.toolsMenuItemText, clearArmed && styles.toolbarButtonDangerText]}>
-                {clearArmed ? "Tap again to confirm" : "🗑️ Clear data"}
+                {clearArmed ? "Tap again to confirm — clears local edits only, not OSM" : "🗑️ Clear data"}
               </Text>
             </TouchableOpacity>
           </View>
@@ -783,7 +783,7 @@ export default function JlosmeScreen() {
               onBlur={() => setClearArmed(false)}
             >
               <Text style={styles.clearButtonText}>
-                {clearArmed ? "Tap again to confirm — clears all local edits" : "Clear working set (start over)"}
+                {clearArmed ? "Tap again to confirm — clears local edits only, not OSM" : "Clear working set (start over)"}
               </Text>
             </TouchableOpacity>
           </View>
