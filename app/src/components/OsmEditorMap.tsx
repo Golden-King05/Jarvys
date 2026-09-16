@@ -40,7 +40,12 @@ export type EditorMode =
   | "ai-trace-stream";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
-export type WayDraftPoint = { existingId: number } | { lat: number; lon: number };
+// `reattachId`: a brand-new position that should nonetheless reuse a
+// parked tagged sub-node's real id (see redrawGuide below) — a modify of
+// that node, not a fresh create, so a point feature riding along a
+// redrawn way (a stop sign, a hydrant) keeps its own identity/tags/history
+// instead of losing them to a plain new geometry-only node.
+export type WayDraftPoint = { existingId: number } | { reattachId: number; lat: number; lon: number } | { lat: number; lon: number };
 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
@@ -69,10 +74,14 @@ interface OsmEditorMapProps {
   initialRegion?: { latitude: number; longitude: number };
   // Original node positions of whichever way is currently armed for a
   // Save-ID redraw (see JlosmeScreen's savedRedrawIds) — rendered as small
-  // non-interactive guide markers so the freshly drawn shape can visually
-  // line up with the one it's replacing. Null/undefined outside a way
+  // guide markers so the freshly drawn shape can visually line up with the
+  // one it's replacing. A tagged entry (e.g. a stop sign that rode along
+  // the old way) is highlighted and pressable — tapping it adds a
+  // reattachId draft point (see WayDraftPoint) so that spot's own id/tags
+  // carry forward onto the new shape. A plain (untagged) entry stays a
+  // subtle, non-interactive reference point. Null/undefined outside a way
   // redraw.
-  redrawGuide?: { id: number; lat: number; lon: number }[] | null;
+  redrawGuide?: { id: number; lat: number; lon: number; tags: Record<string, string> }[] | null;
 }
 
 export interface OsmEditorMapHandle {
@@ -157,7 +166,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   ref
 ) {
   const mapRef = useRef<MapView>(null);
-  const [draftPoints, setDraftPoints] = useState<{ lat: number; lon: number; existingId?: number }[]>([]);
+  const [draftPoints, setDraftPoints] = useState<{ lat: number; lon: number; existingId?: number; reattachId?: number }[]>([]);
 
   useEffect(() => {
     setDraftPoints([]);
@@ -187,6 +196,14 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     onSelectCandidates([osmEditorElementKey("node", id)]);
   }
 
+  // A tagged redraw-guide marker was pressed (see redrawGuide) — adds a
+  // draft point at that same spot, marked to reattach the parked node's
+  // real id rather than create a fresh one.
+  function handleGuidePress(id: number, lat: number, lon: number) {
+    if (mode !== "new-way") return;
+    setDraftPoints((pts) => [...pts, { lat, lon, reattachId: id }]);
+  }
+
   useImperativeHandle(
     ref,
     () => ({
@@ -195,7 +212,13 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           onBoundaryFinish(draftPoints.map((p) => ({ lat: p.lat, lon: p.lon })));
         } else if (mode === "new-way" && draftPoints.length >= 2) {
           onWayFinish(
-            draftPoints.map((p) => (p.existingId !== undefined ? { existingId: p.existingId } : { lat: p.lat, lon: p.lon }))
+            draftPoints.map((p) =>
+              p.existingId !== undefined
+                ? { existingId: p.existingId }
+                : p.reattachId !== undefined
+                  ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
+                  : { lat: p.lat, lon: p.lon }
+            )
           );
         }
         setDraftPoints([]);
@@ -347,14 +370,34 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           );
         })}
 
-      {(redrawGuide ?? []).map((p) => (
-        // Ghost guide marker at a redrawn way's original node position —
-        // purely visual (no press handler), a reference for lining the new
-        // shape up with the old one rather than an auto-snap.
-        <Marker key={`redraw-guide-${p.id}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }} opacity={0.85}>
-          <View style={styles.redrawGuideDot} />
-        </Marker>
-      ))}
+      {(redrawGuide ?? []).map((p) => {
+        const tagged = Object.keys(p.tags).length > 0;
+        const glyph = nodeIconGlyph(p.tags);
+        if (tagged) {
+          // A real point feature (a stop sign, a hydrant) that just
+          // happened to ride along the old way — highlighted and
+          // pressable, unlike a plain geometry-only guide dot: tapping it
+          // reattaches its own id/tags to the new shape instead of losing
+          // them to a fresh, tagless node.
+          return (
+            <Marker
+              key={`redraw-guide-${p.id}`}
+              coordinate={{ latitude: p.lat, longitude: p.lon }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              onPress={() => handleGuidePress(p.id, p.lat, p.lon)}
+            >
+              <View style={styles.redrawGuideDotTagged}>{glyph ? <Text style={styles.redrawGuideGlyph}>{glyph}</Text> : null}</View>
+            </Marker>
+          );
+        }
+        return (
+          // Purely visual (no press handler), a reference for lining the
+          // new shape up with the old one rather than an auto-snap.
+          <Marker key={`redraw-guide-${p.id}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }} opacity={0.85}>
+            <View style={styles.redrawGuideDot} />
+          </Marker>
+        );
+      })}
 
       {draftPoints.length >= 2 ? (
         <Polyline
@@ -387,4 +430,15 @@ const styles = StyleSheet.create({
     borderColor: "#9b59b6",
     backgroundColor: "#fff",
   },
+  redrawGuideDotTagged: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 3,
+    borderColor: "#e74c3c",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  redrawGuideGlyph: { fontSize: 14 },
 });

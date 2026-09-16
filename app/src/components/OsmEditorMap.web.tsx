@@ -63,7 +63,12 @@ export type EditorBaseLayer = "osm" | "satellite" | "bing";
 // already-existing node (clicked on the map) or a brand-new point (clicked
 // on empty space), which the caller creates as a new node before creating
 // the way itself.
-export type WayDraftPoint = { existingId: number } | { lat: number; lon: number };
+// `reattachId`: a brand-new position that should nonetheless reuse a
+// parked tagged sub-node's real id (see redrawGuide below) — a modify of
+// that node, not a fresh create, so a point feature riding along a
+// redrawn way (a stop sign, a hydrant) keeps its own identity/tags/history
+// instead of losing them to a plain new geometry-only node.
+export type WayDraftPoint = { existingId: number } | { reattachId: number; lat: number; lon: number } | { lat: number; lon: number };
 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
@@ -94,10 +99,14 @@ interface OsmEditorMapProps {
   initialRegion?: { latitude: number; longitude: number };
   // Original node positions of whichever way is currently armed for a
   // Save-ID redraw (see JlosmeScreen's savedRedrawIds) — rendered as small
-  // non-interactive numbered guide markers so the freshly drawn shape can
-  // visually line up with the one it's replacing. Null/undefined outside a
-  // way redraw.
-  redrawGuide?: { id: number; lat: number; lon: number }[] | null;
+  // guide markers so the freshly drawn shape can visually line up with the
+  // one it's replacing. A tagged entry (e.g. a stop sign that rode along
+  // the old way) is rendered highlighted and clickable — tapping it adds a
+  // reattachId draft point (see WayDraftPoint) so that spot's own id/tags
+  // carry forward onto the new shape instead of just vanishing with the
+  // rest of the old geometry. A plain (untagged) entry stays a subtle,
+  // non-interactive reference point. Null/undefined outside a way redraw.
+  redrawGuide?: { id: number; lat: number; lon: number; tags: Record<string, string> }[] | null;
 }
 
 export interface OsmEditorMapHandle {
@@ -306,7 +315,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   // here would work too, but this keeps click handling and draft rendering
   // in one place without fighting stale-closure issues from Leaflet's own
   // event callbacks.
-  const draftPoints = useRef<{ lat: number; lon: number; existingId?: number }[]>([]);
+  const draftPoints = useRef<{ lat: number; lon: number; existingId?: number; reattachId?: number }[]>([]);
 
   const nodesById = useMemo(() => {
     const map = new Map<number, OsmEditorElement>();
@@ -586,13 +595,28 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     if (mapInstance.current) selectAt(mapInstance.current, containerPoint);
   }
 
+  // A tagged redraw-guide marker was tapped (see redrawGuide) — adds a
+  // draft point at that same spot, marked to reattach the parked node's
+  // real id rather than create a fresh one.
+  function handleGuideClick(L: Leaflet, id: number, lat: number, lon: number) {
+    if (modeRef.current !== "new-way") return;
+    draftPoints.current = [...draftPoints.current, { lat, lon, reattachId: id }];
+    redrawDraft(L);
+  }
+
   function finishDraw() {
     const pts = draftPoints.current;
     if (modeRef.current === "draw-boundary" && pts.length >= 3) {
       onBoundaryFinishRef.current(pts.map((p) => ({ lat: p.lat, lon: p.lon })));
     } else if (modeRef.current === "new-way" && pts.length >= 2) {
       onWayFinishRef.current(
-        pts.map((p) => (p.existingId !== undefined ? { existingId: p.existingId } : { lat: p.lat, lon: p.lon }))
+        pts.map((p) =>
+          p.existingId !== undefined
+            ? { existingId: p.existingId }
+            : p.reattachId !== undefined
+              ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
+              : { lat: p.lat, lon: p.lon }
+        )
       );
     } else if (modeRef.current === "ai-trace-building") {
       const draft = aiBuildingDraftRef.current;
@@ -830,21 +854,49 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 
       // Ghost guide markers — original positions of the way currently armed
       // for a Save-ID redraw (see JlosmeScreen), drawn last so they sit on
-      // top. Purely visual (no click handler, not draggable): a reference
-      // for lining the new shape up with the old one, not an auto-snap.
+      // top. A plain (untagged) one is purely visual — a reference for
+      // lining the new shape up with the old one, not an auto-snap. A
+      // tagged one (a stop sign, a hydrant — a real point feature that just
+      // happened to ride along this way) is highlighted and clickable:
+      // tapping it drops a draft point that reattaches its own id/tags
+      // instead of losing them to a fresh, tagless node.
       if (redrawGuide) {
         redrawGuide.forEach((p, i) => {
-          L.circleMarker([p.lat, p.lon], {
-            radius: 6,
-            color: "#9b59b6",
-            weight: 2,
-            dashArray: "2 2",
-            fillColor: "#fff",
-            fillOpacity: 0.85,
-            interactive: false,
-          })
-            .addTo(layer)
-            .bindTooltip(String(i + 1), { permanent: true, direction: "top", offset: [0, -6], className: "redraw-guide-label" });
+          const glyph = nodeIconGlyph(p.tags);
+          const tagged = Object.keys(p.tags).length > 0;
+          if (tagged) {
+            L.circleMarker([p.lat, p.lon], {
+              radius: 10,
+              color: "#e74c3c",
+              weight: 3,
+              fillColor: "#fff",
+              fillOpacity: 0.95,
+              interactive: true,
+            })
+              .addTo(layer)
+              .on("click", (e: { originalEvent: Event }) => {
+                L.DomEvent.stopPropagation(e);
+                handleGuideClick(L, p.id, p.lat, p.lon);
+              })
+              .bindTooltip(`${glyph ? glyph + " " : ""}tap to keep this spot`, {
+                permanent: true,
+                direction: "top",
+                offset: [0, -10],
+                className: "redraw-guide-label redraw-guide-label-tagged",
+              });
+          } else {
+            L.circleMarker([p.lat, p.lon], {
+              radius: 6,
+              color: "#9b59b6",
+              weight: 2,
+              dashArray: "2 2",
+              fillColor: "#fff",
+              fillOpacity: 0.85,
+              interactive: false,
+            })
+              .addTo(layer)
+              .bindTooltip(String(i + 1), { permanent: true, direction: "top", offset: [0, -6], className: "redraw-guide-label" });
+          }
         });
       }
     });

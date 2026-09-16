@@ -49,7 +49,12 @@ type SavedRedrawRecord = {
   type: "node" | "way";
   id: number;
   label: string;
-  nodeSnapshot?: { id: number; lat: number; lon: number }[];
+  // Each snapshot entry carries its own tags too — a tagged one (a stop
+  // sign, a hydrant riding along the way) gets highlighted in the
+  // ghost-guide overlay and can be reattached to a newly drawn point
+  // instead of just being deleted with the rest of the old geometry (see
+  // OsmEditorMap's redrawGuide/reattachId and handleWayFinish below).
+  nodeSnapshot?: { id: number; lat: number; lon: number; tags: Record<string, string> }[];
   exclusiveNodeIds?: number[];
 };
 
@@ -237,7 +242,7 @@ export default function JlosmeScreen() {
       exclusiveNodeIds = [];
       for (const nid of uniqueNodeIds) {
         const node = elements.find((el) => el.type === "node" && el.id === nid);
-        if (node) nodeSnapshot.push({ id: nid, ...nodeGeometry(node) });
+        if (node) nodeSnapshot.push({ id: nid, ...nodeGeometry(node), tags: node.tags });
         if (!sharedWithOtherWay.has(nid)) exclusiveNodeIds.push(nid);
       }
     }
@@ -396,9 +401,18 @@ export default function JlosmeScreen() {
     setStatusMessage(null);
     try {
       const nodeIds: number[] = [];
+      // Tagged sub-nodes (a stop sign, a hydrant) the user tapped on the
+      // ghost-guide overlay to keep — reattached below rather than
+      // deleted along with the rest of the way's old, now-orphaned nodes.
+      const reattachedNodeIds = new Set<number>();
       for (const p of points) {
         if ("existingId" in p) {
           nodeIds.push(p.existingId);
+        } else if ("reattachId" in p) {
+          const node = await api.patchOsmEditorElement(baseUrl, token, "node", p.reattachId, { geometry: { lat: p.lat, lon: p.lon } });
+          upsertElement(node);
+          nodeIds.push(node.id);
+          reattachedNodeIds.add(p.reattachId);
         } else {
           const node = await api.createOsmEditorElement(baseUrl, token, {
             type: "node",
@@ -418,13 +432,15 @@ export default function JlosmeScreen() {
         const updated = await api.patchOsmEditorElement(baseUrl, token, "way", redrawingWay.id, { geometry: { nodeIds } });
         upsertElement(updated);
         selectSingle(osmEditorElementKey("way", redrawingWay.id));
-        const orphanedNodeIds = armedRedrawRecord?.exclusiveNodeIds ?? [];
+        const orphanedNodeIds = (armedRedrawRecord?.exclusiveNodeIds ?? []).filter((nid) => !reattachedNodeIds.has(nid));
         consumeArmedRedraw();
         // The way's old exclusive sub-nodes (parked alongside it, see
         // saveIdForRedraw) were only hidden in case the redraw got
         // cancelled — now that it's actually gone through, the way no
         // longer references them at all, so they're genuinely orphaned and
         // can be deleted for real rather than left as invisible clutter.
+        // A tagged one the user chose to reattach (above) is excluded —
+        // it's still in use, just at its new spot on the redrawn way.
         for (const nid of orphanedNodeIds) {
           await deleteElement("node", nid);
         }
@@ -555,8 +571,11 @@ export default function JlosmeScreen() {
   const aiTraceBusy = isAiTraceMode && (aiTraceStatus.kind === "busy" || aiTraceStatus.kind === "loading-model");
   const aiTraceReady = isAiTraceMode && aiTraceStatus.kind === "ready";
 
+  const hasTaggedGuide = (redrawGuide ?? []).some((p) => Object.keys(p.tags).length > 0);
   const redrawSuffix = armedRedrawId
-    ? ` Redrawing ${armedRedrawId.type} #${armedRedrawId.id} — this becomes its new shape.`
+    ? ` Redrawing ${armedRedrawId.type} #${armedRedrawId.id} — this becomes its new shape.${
+        hasTaggedGuide ? " Tap a red guide marker to keep that spot's own id/tags." : ""
+      }`
     : "";
   const modeBannerText =
     mode === "draw-boundary"
@@ -939,7 +958,9 @@ export default function JlosmeScreen() {
               shape reattaches to this same id, so its OSM edit history carries forward instead of forking into a new
               element. A parked way's own (non-intersection) nodes are hidden along with it and shown as small guide
               markers at their old positions while you redraw, so the new shape can line up the same way — a shared
-              intersection node stays put and tappable the whole time.
+              intersection node stays put and tappable the whole time. A tagged sub-node (a stop sign, a hydrant — a
+              real feature, not just a bend in the way) shows up highlighted in red; tap it while redrawing to keep
+              that same id/tags at its new spot instead of losing them.
             </Text>
             <ScrollView style={styles.relationsList}>
               {savedRedrawIds.length === 0 ? <Text style={styles.emptyText}>Nothing parked for redraw yet.</Text> : null}
