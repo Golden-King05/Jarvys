@@ -80,14 +80,19 @@ inventoryRouter.get(
 
 // Base64 photo — the client resizes/compresses to a small thumbnail before
 // sending, so this ceiling is generous headroom against a client that
-// skipped that step, not a target size in itself.
-const photoBase64Schema = z.string().max(6_000_000).optional();
+// skipped that step, not a target size in itself. Nullable (not just
+// optional): the client sends an explicit `null` for "no photo" (it always
+// includes the key, since InventoryItem.photoBase64 is `string | null`
+// throughout, never an absent field), which a plain `.optional()` schema
+// rejects as "Expected string, received null".
+const photoBase64Schema = z.string().max(6_000_000).nullable().optional();
+const photoMimeSchema = z.string().max(40).nullable().optional();
 
 const createItemSchema = z.object({
   name: z.string().min(1).max(120),
   categoryId: z.string().max(64).nullable().optional(),
   photoBase64: photoBase64Schema,
-  photoMime: z.string().max(40).optional(),
+  photoMime: photoMimeSchema,
 });
 
 // The barcode itself is never client-supplied — createInventoryItem always
@@ -109,7 +114,7 @@ const updateItemSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   categoryId: z.string().max(64).nullable().optional(),
   photoBase64: photoBase64Schema,
-  photoMime: z.string().max(40).optional(),
+  photoMime: photoMimeSchema,
 });
 
 inventoryRouter.put(
