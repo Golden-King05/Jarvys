@@ -478,6 +478,16 @@ export function nodeVisibilityAtZoom(zoom: number): { scale: number; opacity: nu
   return { scale: 0.3 + 0.7 * t, opacity: 0.45 + 0.55 * t };
 }
 
+// Real-world meters per screen pixel at a given zoom/latitude, standard
+// web-mercator tile relationship (same formula roadTrace.ts uses for its
+// own zoom-aware distance thresholds). Lets native's area-fill hole
+// (OsmEditorMap.tsx, which has no direct latlng<->pixel projection the way
+// Leaflet gives the web map) target a real fixed-pixel band width by
+// converting it to meters at the shape's own latitude/zoom instead.
+export function metersPerPixel(zoom: number, latDeg: number): number {
+  return (156543.03392 * Math.cos((latDeg * Math.PI) / 180)) / 2 ** zoom;
+}
+
 // Shortest distance from point (px,py) to the segment (ax,ay)-(bx,by) —
 // plain 2D math, usable in any consistent unit (screen pixels in
 // practice, for the click-candidate search in OsmEditorMap.web.tsx).

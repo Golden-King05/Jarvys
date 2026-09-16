@@ -5,6 +5,7 @@ import type { OsmEditorElement } from "../api";
 import { USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import {
   areaFillColor,
+  metersPerPixel,
   nodeGeometry,
   nodeIconGlyph,
   nodeVisibilityAtZoom,
@@ -83,25 +84,40 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// How far in (as a fraction of the ring's own size) an area's hole is
-// inset from its outline — see the areal-way rendering below.
-const AREA_FILL_HOLE_FRACTION = 0.65;
+// Target width, in screen pixels, of the tinted border band drawn around
+// an area's outline — see insetRingMeters below.
+const AREA_FILL_BAND_PX = 24;
 
 // Shrinks a ring toward its own centroid so an area's fill stays strictly
 // inside the boundary (JOSM tints only a band near the edge, not the whole
-// interior) rather than straddling it like a centered stroke would. The
-// web map (OsmEditorMap.web.tsx) insets by a fixed screen-pixel amount
-// using Leaflet's latlng<->pixel projection; native has no equivalent
-// projection readily available here, so this uses a fixed proportion of
-// the shape's own size instead — same "fill only near the edge" look,
-// just not perfectly constant across zoom levels.
-function insetRingFraction(latlngs: { latitude: number; longitude: number }[], fraction: number): { latitude: number; longitude: number }[] | null {
+// interior) rather than straddling it like a centered stroke would, and
+// keeps that band a genuinely fixed screen-pixel width across zoom levels
+// (so it shrinks relative to the shape as you zoom in, same as the web map
+// — OsmEditorMap.web.tsx does this directly via Leaflet's latlng<->pixel
+// projection). Native has no such projection, so this converts the target
+// pixel width to real-world meters at the shape's own latitude/zoom
+// (metersPerPixel) instead, then insets each vertex toward the centroid by
+// that many meters. Returns null when the shape is too small on screen to
+// keep a hole open at all, so it just reads as fully filled — same
+// small-shape behavior as web's insetRingPx.
+function insetRingMeters(
+  latlngs: { latitude: number; longitude: number }[],
+  bandPx: number,
+  zoom: number
+): { latitude: number; longitude: number }[] | null {
   if (latlngs.length < 3) return null;
   const cLat = latlngs.reduce((sum, p) => sum + p.latitude, 0) / latlngs.length;
   const cLon = latlngs.reduce((sum, p) => sum + p.longitude, 0) / latlngs.length;
+  const metersPerDegLat = 111320;
+  const metersPerDegLon = 111320 * Math.cos((cLat * Math.PI) / 180);
+  const radiiMeters = latlngs.map((p) => Math.hypot((p.latitude - cLat) * metersPerDegLat, (p.longitude - cLon) * metersPerDegLon));
+  const minRadiusMeters = Math.min(...radiiMeters);
+  const bandMeters = bandPx * metersPerPixel(zoom, cLat);
+  if (minRadiusMeters <= bandMeters) return null;
+  const scale = (minRadiusMeters - bandMeters) / minRadiusMeters;
   return latlngs.map((p) => ({
-    latitude: cLat + (p.latitude - cLat) * fraction,
-    longitude: cLon + (p.longitude - cLon) * fraction,
+    latitude: cLat + (p.latitude - cLat) * scale,
+    longitude: cLon + (p.longitude - cLon) * scale,
   }));
 }
 
@@ -232,11 +248,9 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           if (wayLooksAreal(el) && closed) {
             // JOSM only tints a band near an area's outline rather than
             // solid-filling the whole interior, so a big polygon doesn't
-            // fully hide the imagery underneath — see insetRingFraction
-            // above for why this is a proportional inset rather than a
-            // fixed-pixel one on native.
+            // fully hide the imagery underneath — see insetRingMeters above.
             const onPress = () => onSelectCandidates([osmEditorElementKey("way", el.id)]);
-            const hole = insetRingFraction(latlngs, AREA_FILL_HOLE_FRACTION);
+            const hole = insetRingMeters(latlngs, AREA_FILL_BAND_PX, zoom);
             return (
               <React.Fragment key={key}>
                 <Polygon
