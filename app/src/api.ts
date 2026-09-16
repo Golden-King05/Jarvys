@@ -181,6 +181,27 @@ export interface WikipediaCluster {
   articles: WikipediaArticle[];
 }
 
+// Barcode inventory — a user's own catalog of physical items, sorted into
+// categories, each wearing a locally-generated barcode (see barcode128.ts)
+// that scanning looks up to flip checkedOut on and off.
+export interface InventoryCategory {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface InventoryItem {
+  id: string;
+  categoryId: string | null;
+  name: string;
+  barcode: string;
+  photoBase64: string | null;
+  photoMime: string | null;
+  checkedOut: boolean;
+  checkedOutAt: string | null;
+  createdAt: string;
+}
+
 export interface ChatResponse {
   reply: string | null;
   usage: ChatUsage | null;
@@ -555,4 +576,48 @@ export const api = {
     }
     return data as OsmUploadResult;
   },
+
+  getInventoryCategories: (baseUrl: string, token: string) =>
+    request<{ categories: InventoryCategory[] }>(baseUrl, "/inventory/categories", { token }),
+
+  createInventoryCategory: (baseUrl: string, token: string, name: string) =>
+    request<InventoryCategory>(baseUrl, "/inventory/categories", { method: "POST", token, body: { name } }),
+
+  deleteInventoryCategory: (baseUrl: string, token: string, id: string) =>
+    request<{ ok: boolean }>(baseUrl, `/inventory/categories/${id}`, { method: "DELETE", token }),
+
+  getInventoryItems: (baseUrl: string, token: string) =>
+    request<{ items: InventoryItem[] }>(baseUrl, "/inventory/items", { token }),
+
+  createInventoryItem: (
+    baseUrl: string,
+    token: string,
+    item: { name: string; categoryId?: string | null; photoBase64?: string | null; photoMime?: string | null }
+  ) => request<InventoryItem>(baseUrl, "/inventory/items", { method: "POST", token, body: item }),
+
+  updateInventoryItem: (
+    baseUrl: string,
+    token: string,
+    id: string,
+    patch: { name?: string; categoryId?: string | null; photoBase64?: string | null; photoMime?: string | null }
+  ) => request<InventoryItem>(baseUrl, `/inventory/items/${id}`, { method: "PUT", token, body: patch }),
+
+  deleteInventoryItem: (baseUrl: string, token: string, id: string) =>
+    request<{ ok: boolean }>(baseUrl, `/inventory/items/${id}`, { method: "DELETE", token }),
+
+  checkOutInventoryItem: (baseUrl: string, token: string, id: string) =>
+    request<InventoryItem>(baseUrl, `/inventory/items/${id}/checkout`, { method: "POST", token }),
+
+  checkInInventoryItem: (baseUrl: string, token: string, id: string) =>
+    request<InventoryItem>(baseUrl, `/inventory/items/${id}/checkin`, { method: "POST", token }),
+
+  // The scan flow's one call — the server looks the barcode up and flips
+  // checkedOut, telling the caller which way it went so the scan screen can
+  // show "✅ Checked out: X" vs "↩️ Checked in: X" without a second lookup.
+  scanInventoryBarcode: (baseUrl: string, token: string, barcode: string) =>
+    request<{ item: InventoryItem; action: "checked-out" | "checked-in" }>(baseUrl, "/inventory/scan", {
+      method: "POST",
+      token,
+      body: { barcode },
+    }),
 };

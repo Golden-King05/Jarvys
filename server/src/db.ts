@@ -98,6 +98,37 @@ await db.executeMultiple(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_osm_editor_elements_user ON osm_editor_elements(user_id);
+
+  -- Barcode inventory: a user's own physical-item catalog, sorted into
+  -- categories, each item wearing a locally-generated barcode (never a real
+  -- retail one) that scanning looks up to flip checked_out on and off — the
+  -- "what did I take out, what's still missing" tracking the feature is for.
+  CREATE TABLE IF NOT EXISTS inventory_categories (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, name)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_inventory_categories_user ON inventory_categories(user_id);
+
+  CREATE TABLE IF NOT EXISTS inventory_items (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    category_id TEXT REFERENCES inventory_categories(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    barcode TEXT NOT NULL,
+    photo_base64 TEXT,
+    photo_mime TEXT,
+    checked_out INTEGER NOT NULL DEFAULT 0,
+    checked_out_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, barcode)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_inventory_items_user ON inventory_items(user_id);
+  CREATE INDEX IF NOT EXISTS idx_inventory_items_category ON inventory_items(user_id, category_id);
 `);
 
 // chat_messages predates map_data_json/tools_used_json/tools_failed_json —
@@ -649,4 +680,176 @@ export async function applyOsmUploadResults(
       args: [userId, d.type, d.id],
     });
   }
+}
+
+// --- Barcode inventory ---
+
+export interface InventoryCategoryRow {
+  id: string;
+  user_id: string;
+  name: string;
+  created_at: string;
+}
+
+export async function getInventoryCategories(userId: string): Promise<InventoryCategoryRow[]> {
+  const result = await db.execute({
+    sql: "SELECT * FROM inventory_categories WHERE user_id = ? ORDER BY name COLLATE NOCASE ASC",
+    args: [userId],
+  });
+  return result.rows as unknown as InventoryCategoryRow[];
+}
+
+// Renaming an existing category (same name, different case counts as the
+// same one via COLLATE NOCASE... actually SQLite's UNIQUE is case-sensitive
+// by default, so this upserts on an exact-case match only) just updates it
+// in place rather than erroring, so re-adding "Tools" a second time is a
+// harmless no-op instead of a duplicate-name error the caller has to catch.
+export async function createInventoryCategory(userId: string, name: string): Promise<InventoryCategoryRow> {
+  const id = randomUUID();
+  await db.execute({
+    sql: `INSERT INTO inventory_categories (id, user_id, name) VALUES (?, ?, ?)
+          ON CONFLICT(user_id, name) DO UPDATE SET name = excluded.name`,
+    args: [id, userId, name],
+  });
+  const result = await db.execute({
+    sql: "SELECT * FROM inventory_categories WHERE user_id = ? AND name = ?",
+    args: [userId, name],
+  });
+  return result.rows[0] as unknown as InventoryCategoryRow;
+}
+
+// Items in a deleted category fall back to "Uncategorized" (category_id ->
+// NULL, via the column's own ON DELETE SET NULL) rather than being deleted
+// themselves — losing an item because its category got tidied away would be
+// a much worse surprise than it just needing a new category.
+export async function deleteInventoryCategory(userId: string, id: string): Promise<boolean> {
+  const result = await db.execute({
+    sql: "DELETE FROM inventory_categories WHERE id = ? AND user_id = ?",
+    args: [id, userId],
+  });
+  return result.rowsAffected > 0;
+}
+
+export interface InventoryItemRow {
+  id: string;
+  user_id: string;
+  category_id: string | null;
+  name: string;
+  barcode: string;
+  photo_base64: string | null;
+  photo_mime: string | null;
+  checked_out: number;
+  checked_out_at: string | null;
+  created_at: string;
+}
+
+export interface NewInventoryItem {
+  name: string;
+  categoryId?: string | null;
+  photoBase64?: string | null;
+  photoMime?: string | null;
+}
+
+export interface UpdateInventoryItem {
+  name?: string;
+  categoryId?: string | null;
+  photoBase64?: string | null;
+  photoMime?: string | null;
+}
+
+// 12 random digits — plain, printable, Code128-friendly, and never a real
+// retail barcode's own format, so there's no chance of an item here reading
+// as an actual product were it ever scanned somewhere else.
+function generateInventoryBarcode(): string {
+  let s = "";
+  for (let i = 0; i < 12; i++) s += Math.floor(Math.random() * 10);
+  return s;
+}
+
+export async function getInventoryItems(userId: string): Promise<InventoryItemRow[]> {
+  const result = await db.execute({
+    sql: "SELECT * FROM inventory_items WHERE user_id = ? ORDER BY created_at ASC",
+    args: [userId],
+  });
+  return result.rows as unknown as InventoryItemRow[];
+}
+
+export async function getInventoryItemByBarcode(userId: string, barcode: string): Promise<InventoryItemRow | null> {
+  const result = await db.execute({
+    sql: "SELECT * FROM inventory_items WHERE user_id = ? AND barcode = ?",
+    args: [userId, barcode],
+  });
+  return (result.rows[0] as unknown as InventoryItemRow | undefined) ?? null;
+}
+
+// The barcode is generated here, not client-supplied — retried a handful of
+// times against vanishingly unlikely collisions within the same account
+// (12 digits is a 10^12 space) rather than actually needing to loop in
+// practice.
+export async function createInventoryItem(userId: string, item: NewInventoryItem): Promise<InventoryItemRow> {
+  const id = randomUUID();
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const barcode = generateInventoryBarcode();
+    try {
+      await db.execute({
+        sql: `INSERT INTO inventory_items (id, user_id, category_id, name, barcode, photo_base64, photo_mime)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: [id, userId, item.categoryId ?? null, item.name, barcode, item.photoBase64 ?? null, item.photoMime ?? null],
+      });
+      const result = await db.execute({ sql: "SELECT * FROM inventory_items WHERE id = ?", args: [id] });
+      return result.rows[0] as unknown as InventoryItemRow;
+    } catch (err) {
+      lastErr = err;
+      if (!(err instanceof Error) || !/UNIQUE/i.test(err.message)) throw err;
+    }
+  }
+  throw lastErr;
+}
+
+export async function updateInventoryItem(
+  userId: string,
+  id: string,
+  patch: UpdateInventoryItem
+): Promise<InventoryItemRow | null> {
+  const current = await db.execute({ sql: "SELECT * FROM inventory_items WHERE id = ? AND user_id = ?", args: [id, userId] });
+  const row = current.rows[0] as unknown as InventoryItemRow | undefined;
+  if (!row) return null;
+
+  const next = {
+    name: patch.name ?? row.name,
+    category_id: patch.categoryId !== undefined ? patch.categoryId : row.category_id,
+    photo_base64: patch.photoBase64 !== undefined ? patch.photoBase64 : row.photo_base64,
+    photo_mime: patch.photoMime !== undefined ? patch.photoMime : row.photo_mime,
+  };
+
+  await db.execute({
+    sql: `UPDATE inventory_items SET name = ?, category_id = ?, photo_base64 = ?, photo_mime = ? WHERE id = ? AND user_id = ?`,
+    args: [next.name, next.category_id, next.photo_base64, next.photo_mime, id, userId],
+  });
+
+  const updated = await db.execute({ sql: "SELECT * FROM inventory_items WHERE id = ?", args: [id] });
+  return updated.rows[0] as unknown as InventoryItemRow;
+}
+
+export async function setInventoryItemCheckedOut(
+  userId: string,
+  id: string,
+  checkedOut: boolean
+): Promise<InventoryItemRow | null> {
+  const result = await db.execute({
+    sql: "UPDATE inventory_items SET checked_out = ?, checked_out_at = ? WHERE id = ? AND user_id = ?",
+    args: [checkedOut ? 1 : 0, checkedOut ? new Date().toISOString() : null, id, userId],
+  });
+  if (result.rowsAffected === 0) return null;
+  const updated = await db.execute({ sql: "SELECT * FROM inventory_items WHERE id = ?", args: [id] });
+  return updated.rows[0] as unknown as InventoryItemRow;
+}
+
+export async function deleteInventoryItem(userId: string, id: string): Promise<boolean> {
+  const result = await db.execute({
+    sql: "DELETE FROM inventory_items WHERE id = ? AND user_id = ?",
+    args: [id, userId],
+  });
+  return result.rowsAffected > 0;
 }

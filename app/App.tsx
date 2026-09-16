@@ -15,11 +15,12 @@ import type { LayerCommand, MapData } from "./src/api";
 import type { BaseLayerKind } from "./src/utils/baseLayer";
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
+import InventoryScreen from "./src/screens/InventoryScreen";
 import JlosmeScreen from "./src/screens/JlosmeScreen";
 import MapScreen from "./src/screens/MapScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 
-type Tab = "chat" | "map" | "editor" | "settings";
+type Tab = "chat" | "map" | "editor" | "inventory" | "settings";
 
 function AuthedApp() {
   const [tab, setTab] = useState<Tab>("chat");
@@ -61,13 +62,22 @@ function AuthedApp() {
             <Text style={tab === "editor" ? styles.tabActive : styles.tab}>JLOSME</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity onPress={() => setTab("settings")} hitSlop={8}>
-          <Ionicons
-            name={tab === "settings" ? "settings" : "settings-outline"}
-            size={20}
-            color={tab === "settings" ? "#000" : "#888"}
-          />
-        </TouchableOpacity>
+        <View style={styles.tabGroup}>
+          <TouchableOpacity onPress={() => setTab("inventory")} hitSlop={8}>
+            <Ionicons
+              name={tab === "inventory" ? "barcode" : "barcode-outline"}
+              size={22}
+              color={tab === "inventory" ? "#000" : "#888"}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setTab("settings")} hitSlop={8}>
+            <Ionicons
+              name={tab === "settings" ? "settings" : "settings-outline"}
+              size={20}
+              color={tab === "settings" ? "#000" : "#888"}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
       <View style={styles.flex}>
         <View style={[styles.flex, tab !== "chat" && styles.hidden]}>
@@ -103,6 +113,7 @@ function AuthedApp() {
           />
         ) : null}
         {tab === "editor" ? <JlosmeScreen /> : null}
+        {tab === "inventory" ? <InventoryScreen /> : null}
         {tab === "settings" ? <SettingsScreen /> : null}
       </View>
     </View>

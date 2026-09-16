@@ -30,7 +30,23 @@
           "locationWhenInUsePermission": "Jarvys uses your location to center the map near you."
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Jarvys uses the camera to scan item barcodes.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Jarvys uses your photos to add a picture of an inventory item.",
+          "cameraPermission": "Jarvys uses the camera to take a picture of an inventory item.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-sharing"
     ]
   }
 }
