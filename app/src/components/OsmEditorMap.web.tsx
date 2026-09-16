@@ -110,6 +110,9 @@ function actionColor(action: OsmEditorElement["action"]): string {
   return "#2980b9";
 }
 
+// Fill color for a selected default (no-preset) node square — see nodeIcon.
+const SELECTED_NODE_FILL = "#e67e22";
+
 function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<string, string>) {
   const glyph = nodeIconGlyph(tags);
   if (glyph) {
@@ -126,11 +129,13 @@ function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<str
   }
   // No recognized preset — JOSM's own default node look is a small, plain
   // square rather than a bold circle, so an icon-less node doesn't visually
-  // compete with the ones that do have a preset match.
+  // compete with the ones that do have a preset match. Hollow (just the
+  // action-colored outline) until selected, at which point it fills solid
+  // orange so the current selection stands out from the rest.
   const size = selected ? 11 : 7;
-  const border = selected ? "2.5px solid #fff" : "1.5px solid #fff";
+  const fill = selected ? SELECTED_NODE_FILL : "transparent";
   return L.divIcon({
-    html: `<div style="width:${size}px;height:${size}px;background:${color};border:${border};box-shadow:0 0 2px rgba(0,0,0,0.4);transform:translate(-50%,-50%)"></div>`,
+    html: `<div style="width:${size}px;height:${size}px;background:${fill};border:1.5px solid ${color};box-shadow:0 0 2px rgba(0,0,0,0.4);transform:translate(-50%,-50%)"></div>`,
     className: "",
     iconSize: [0, 0],
   });

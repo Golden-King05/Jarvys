@@ -103,6 +103,10 @@ function actionColor(action: OsmEditorElement["action"]): string {
   return "#2980b9";
 }
 
+// Fill color for a selected default (no-preset) node square — see the
+// node marker rendering below.
+const SELECTED_NODE_FILL = "#e67e22";
+
 const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(function OsmEditorMap(
   {
     elements,
@@ -279,11 +283,18 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
                 </View>
               ) : (
                 // No recognized preset — JOSM's own default node look is a
-                // small, plain square rather than a bold circle.
+                // small, plain square rather than a bold circle. Hollow
+                // (just the action-colored outline) until selected, at
+                // which point it fills solid orange.
                 <View
                   style={[
                     styles.nodeDot,
-                    { backgroundColor: color, width: selected ? 11 : 7, height: selected ? 11 : 7 },
+                    {
+                      borderColor: color,
+                      backgroundColor: selected ? SELECTED_NODE_FILL : "transparent",
+                      width: selected ? 11 : 7,
+                      height: selected ? 11 : 7,
+                    },
                   ]}
                 />
               )}
@@ -311,7 +322,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 export default OsmEditorMap;
 
 const styles = StyleSheet.create({
-  nodeDot: { borderWidth: 1.5, borderColor: "#fff" },
+  nodeDot: { borderWidth: 1.5 },
   nodeBadge: { backgroundColor: "#fff", borderWidth: 2, alignItems: "center", justifyContent: "center" },
   draftDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: "#fff" },
 });
