@@ -20,6 +20,7 @@ import {
   type TagDefinition,
 } from "../api";
 import { osmTargetStorage } from "../utils/osmAuth";
+import { jlosmeSavedRedrawIdsStorage } from "../storage";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import { isBingConfigured } from "../utils/bingImagery";
@@ -73,6 +74,47 @@ export default function JlosmeScreen() {
   // banner can show the right text/buttons without knowing how tracing
   // itself works.
   const [aiTraceStatus, setAiTraceStatus] = useState<AiTraceStatus>({ kind: "idle" });
+
+  // A way/node whose geometry was too far gone to nudge back into shape —
+  // "Save ID" (in its detail panel) parks its real id/type here and hides
+  // it from the map, so you can draw an entirely fresh shape and reattach
+  // it to that same id (a modify) instead of delete-then-recreate, which
+  // would break its OSM edit history (see osmEditorUpload.ts). Persisted
+  // so a parked id survives a restart before it's redrawn.
+  const [savedRedrawIds, setSavedRedrawIds] = useState<{ type: "node" | "way"; id: number; label: string }[]>([]);
+  // The one entry from the list above currently "loaded" — the next
+  // new-node placement or new-way finish (including any AI trace tool,
+  // since they all funnel through the same finish handlers) re-attaches to
+  // this id instead of creating a new element.
+  const [armedRedrawId, setArmedRedrawId] = useState<{ type: "node" | "way"; id: number } | null>(null);
+  const [showSavedIds, setShowSavedIds] = useState(false);
+
+  useEffect(() => {
+    jlosmeSavedRedrawIdsStorage.get().then((raw) => {
+      if (!raw) return;
+      try {
+        setSavedRedrawIds(JSON.parse(raw));
+      } catch {
+        // Ignore corrupt/old-shape storage — starts empty rather than crashing.
+      }
+    });
+  }, []);
+  useEffect(() => {
+    jlosmeSavedRedrawIdsStorage.set(JSON.stringify(savedRedrawIds));
+  }, [savedRedrawIds]);
+
+  const savedRedrawKeys = useMemo(
+    () => new Set(savedRedrawIds.map((r) => osmEditorElementKey(r.type, r.id))),
+    [savedRedrawIds]
+  );
+  // What the map actually renders — a saved-for-redraw element stays in
+  // `elements` (its real id/version/tags are still needed to reattach the
+  // redrawn geometry later) but disappears from the map itself, which is
+  // the whole point: a clean slate to draw its replacement into.
+  const mapElements = useMemo(
+    () => elements.filter((el) => !savedRedrawKeys.has(osmEditorElementKey(el.type, el.id))),
+    [elements, savedRedrawKeys]
+  );
 
   useEffect(() => {
     setDeleteArmed(false);
@@ -131,6 +173,47 @@ export default function JlosmeScreen() {
     setSelectionIndex(next);
     setSelectedKey(selectionCandidates[next]);
   }
+
+  // Parks the selected way/node's real id for a later redraw (see
+  // savedRedrawIds above) and closes its panel — the element itself stays
+  // in `elements` untouched (mapElements is what hides it), so its tags
+  // and version are still there to reattach fresh geometry to once redrawn.
+  function saveIdForRedraw() {
+    if (!selectedElement || selectedElement.type === "relation") return;
+    // Captured as locals (not a live property access) so the closure below
+    // keeps TypeScript's narrowing of type to "node" | "way".
+    const { type, id } = selectedElement;
+    const label = elementDisplayName(selectedElement);
+    setSavedRedrawIds((prev) => [...prev, { type, id, label }]);
+    selectSingle(null);
+  }
+
+  // Un-hides a saved id without redrawing it — back to normal, still on
+  // the map, no longer parked.
+  function restoreSavedRedrawId(rec: { type: "node" | "way"; id: number }) {
+    setSavedRedrawIds((prev) => prev.filter((r) => !(r.type === rec.type && r.id === rec.id)));
+    if (armedRedrawId && armedRedrawId.type === rec.type && armedRedrawId.id === rec.id) setArmedRedrawId(null);
+  }
+
+  // "Loads" a saved id as the target for the next new-node placement or
+  // new-way finish, and jumps straight into the matching draw tool.
+  function armSavedRedrawId(rec: { type: "node" | "way"; id: number }) {
+    setArmedRedrawId(rec);
+    setShowSavedIds(false);
+    setMode(rec.type === "node" ? "new-node" : "new-way");
+  }
+
+  // Called once a redraw's new geometry has actually been attached to the
+  // parked id (see handleCreateNode/handleWayFinish) — removes it from the
+  // saved list entirely, since it's no longer parked, it's just that
+  // element again with new geometry.
+  function consumeArmedRedraw() {
+    if (!armedRedrawId) return;
+    const { type, id } = armedRedrawId;
+    setSavedRedrawIds((prev) => prev.filter((r) => !(r.type === type && r.id === id)));
+    setArmedRedrawId(null);
+  }
+
   // A local, debounced draft of the selected node/way's tags — see
   // useDebouncedTagsDraft for why this can't just be a straight PATCH per
   // keystroke.
@@ -227,6 +310,16 @@ export default function JlosmeScreen() {
   async function handleCreateNode(lat: number, lon: number) {
     if (!token) return;
     try {
+      // A redraw is loaded (see armSavedRedrawId) — reattach this new
+      // position to the parked id (a modify of the same real node) instead
+      // of creating a brand-new one, so its OSM history stays continuous.
+      if (armedRedrawId && armedRedrawId.type === "node") {
+        const updated = await api.patchOsmEditorElement(baseUrl, token, "node", armedRedrawId.id, { geometry: { lat, lon } });
+        upsertElement(updated);
+        selectSingle(osmEditorElementKey("node", armedRedrawId.id));
+        consumeArmedRedraw();
+        return;
+      }
       const el = await api.createOsmEditorElement(baseUrl, token, { type: "node", tags: {}, geometry: { lat, lon } });
       upsertElement(el);
     } catch (e) {
@@ -240,8 +333,9 @@ export default function JlosmeScreen() {
   // manual way-drawing never sets this.
   async function handleWayFinish(points: WayDraftPoint[], closeLoop = false) {
     if (!token) return;
+    const redrawingWay = armedRedrawId && armedRedrawId.type === "way" ? armedRedrawId : null;
     setMode("view");
-    setBusy("Creating way…");
+    setBusy(redrawingWay ? "Redrawing way…" : "Creating way…");
     setStatusMessage(null);
     try {
       const nodeIds: number[] = [];
@@ -260,6 +354,15 @@ export default function JlosmeScreen() {
       }
       if (closeLoop && nodeIds.length >= 3) {
         nodeIds.push(nodeIds[0]);
+      }
+      // The new nodes are genuinely new either way — only the *way's own*
+      // identity carries forward from the parked id when redrawing.
+      if (redrawingWay) {
+        const updated = await api.patchOsmEditorElement(baseUrl, token, "way", redrawingWay.id, { geometry: { nodeIds } });
+        upsertElement(updated);
+        selectSingle(osmEditorElementKey("way", redrawingWay.id));
+        consumeArmedRedraw();
+        return;
       }
       const way = await api.createOsmEditorElement(baseUrl, token, { type: "way", tags: {}, geometry: { nodeIds } });
       upsertElement(way);
@@ -369,6 +472,10 @@ export default function JlosmeScreen() {
     selectSingle(null);
     setClearArmed(false);
     setShowImagery(false);
+    // Any parked id would now point at data that's no longer in the local
+    // working set (or on the server, if it hadn't been uploaded yet).
+    setSavedRedrawIds([]);
+    setArmedRedrawId(null);
   }
 
   function toggleMode(next: EditorMode) {
@@ -382,13 +489,16 @@ export default function JlosmeScreen() {
   const aiTraceBusy = isAiTraceMode && (aiTraceStatus.kind === "busy" || aiTraceStatus.kind === "loading-model");
   const aiTraceReady = isAiTraceMode && aiTraceStatus.kind === "ready";
 
+  const redrawSuffix = armedRedrawId
+    ? ` Redrawing ${armedRedrawId.type} #${armedRedrawId.id} — this becomes its new shape.`
+    : "";
   const modeBannerText =
     mode === "draw-boundary"
       ? "Tap the map to add boundary points, then Finish."
       : mode === "new-way"
-        ? "Tap existing nodes or empty space to build a way, then Finish."
+        ? `Tap existing nodes or empty space to build a way, then Finish.${redrawSuffix}`
         : mode === "new-node"
-          ? "Tap the map to add nodes."
+          ? `Tap the map to add nodes.${redrawSuffix}`
           : mode === "ai-trace-building"
             ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
             : mode === "ai-trace-road"
@@ -402,7 +512,7 @@ export default function JlosmeScreen() {
       <View style={styles.mapWrap}>
         <OsmEditorMap
           ref={mapRef}
-          elements={elements}
+          elements={mapElements}
           selectedKey={selectedKey}
           onSelectCandidates={handleSelectCandidates}
           mode={mode}
@@ -441,6 +551,9 @@ export default function JlosmeScreen() {
                   mapRef.current?.cancelDraw();
                   setMode("view");
                   setAiTraceStatus({ kind: "idle" });
+                  // Un-arms without un-parking — the id stays in the saved
+                  // list, ready to arm again later from the gear menu.
+                  setArmedRedrawId(null);
                 }}
               >
                 <Text style={styles.modeBannerCancel}>{mode === "new-node" ? "Done" : aiTraceReady ? "Discard" : "Cancel"}</Text>
@@ -580,6 +693,15 @@ export default function JlosmeScreen() {
                 {clearArmed ? "Tap again to confirm — clears local edits only, not OSM" : "🗑️ Clear data"}
               </Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.toolsMenuItem}
+              onPress={() => {
+                setShowSavedIds(true);
+                setShowToolsMenu(false);
+              }}
+            >
+              <Text style={styles.toolsMenuItemText}>📌 Saved IDs ({savedRedrawIds.length})</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -637,6 +759,15 @@ export default function JlosmeScreen() {
                   suggestedKeys={suggestedKeys}
                   tagDefinitions={tagDefinitions}
                 />
+
+                {/* Parks this element's real id for a full redraw — see
+                    savedRedrawIds above. For when adjusting the existing
+                    shape isn't worth it and it's easier to draw it fresh,
+                    without losing the id's OSM edit history the way a
+                    plain delete-then-recreate would. */}
+                <TouchableOpacity style={styles.saveIdButton} onPress={saveIdForRedraw}>
+                  <Text style={styles.saveIdButtonText}>📌 Save ID (redraw from scratch)</Text>
+                </TouchableOpacity>
 
                 <TouchableOpacity
                   style={[styles.deleteButton, deleteArmed && styles.deleteButtonArmed]}
@@ -720,6 +851,47 @@ export default function JlosmeScreen() {
             >
               <Text style={styles.newRelationButtonText}>+ New relation</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Saved IDs — elements parked for a full redraw (see savedRedrawIds
+          above); pick one to load it as the target for the next new-node
+          placement or new-way finish. */}
+      <Modal visible={showSavedIds} transparent animationType="fade" onRequestClose={() => setShowSavedIds(false)}>
+        <View style={styles.overlay}>
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Saved IDs</Text>
+              <TouchableOpacity onPress={() => setShowSavedIds(false)} hitSlop={8}>
+                <Text style={styles.closeIcon}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.savedIdsHint}>
+              Parked from a way/node's detail panel ("Save ID") — pick one, then draw its replacement on the map. The new
+              shape reattaches to this same id, so its OSM edit history carries forward instead of forking into a new
+              element.
+            </Text>
+            <ScrollView style={styles.relationsList}>
+              {savedRedrawIds.length === 0 ? <Text style={styles.emptyText}>Nothing parked for redraw yet.</Text> : null}
+              {savedRedrawIds.map((r) => (
+                <View key={osmEditorElementKey(r.type, r.id)} style={styles.savedIdRow}>
+                  <TouchableOpacity style={styles.savedIdRowMain} onPress={() => armSavedRedrawId(r)}>
+                    <Text style={styles.relationRowText}>
+                      {r.type} #{r.id} — {r.label}
+                    </Text>
+                    <Text style={styles.savedIdRowHint}>
+                      {armedRedrawId && armedRedrawId.type === r.type && armedRedrawId.id === r.id
+                        ? "Loaded — draw its new shape"
+                        : `Tap to draw a new ${r.type}`}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => restoreSavedRedrawId(r)} hitSlop={8}>
+                    <Text style={styles.savedIdRestore}>Restore</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -981,6 +1153,16 @@ const styles = StyleSheet.create({
   candidateNavArrow: { fontFamily: fonts.semiBold, fontSize: 16, color: "#2980b9", paddingHorizontal: 6 },
   candidateNavLabel: { fontFamily: fonts.medium, fontSize: 12, color: "#555" },
   actionBadge: { fontFamily: fonts.regular, fontSize: 11, color: "#888", paddingHorizontal: 16, marginBottom: 8 },
+  saveIdButton: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#2980b9",
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  saveIdButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
   deleteButton: {
     marginHorizontal: 16,
     marginBottom: 16,
@@ -1006,6 +1188,18 @@ const styles = StyleSheet.create({
   relationRowAction: { fontFamily: fonts.medium, fontSize: 11, color: "#e67e22" },
   newRelationButton: { padding: 16 },
   newRelationButtonText: { fontFamily: fonts.medium, fontSize: 13, color: "#2980b9" },
+  savedIdsHint: { fontFamily: fonts.regular, fontSize: 12, color: "#777", paddingHorizontal: 16, marginBottom: 8, lineHeight: 17 },
+  savedIdRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  savedIdRowMain: { flex: 1 },
+  savedIdRowHint: { fontFamily: fonts.regular, fontSize: 11, color: "#2980b9", marginTop: 2 },
+  savedIdRestore: { fontFamily: fonts.medium, fontSize: 12, color: "#888", marginLeft: 12 },
   imageryRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingVertical: 8 },
   radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: "#bbb" },
   radioSelected: { borderColor: "#2980b9", backgroundColor: "#2980b9" },

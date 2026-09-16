@@ -14,3 +14,7 @@ export function makeKeyStorage(key: string) {
 }
 
 export const tokenStorage = makeKeyStorage("jarvys.token");
+// The JLOSME editor's "save ID for redraw" list (see JlosmeScreen.tsx) —
+// persisted so a parked way/node id survives an app restart while its
+// replacement geometry hasn't been drawn yet.
+export const jlosmeSavedRedrawIdsStorage = makeKeyStorage("jarvys.jlosmeSavedRedrawIds");
