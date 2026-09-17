@@ -6,7 +6,13 @@ import { api, type InventoryCategory, type InventoryItem } from "../api";
 import { useAuth } from "../AuthContext";
 import { fonts } from "../theme";
 import Barcode128 from "../components/Barcode128";
-import { pickItemPhotoFromCamera, pickItemPhotoFromLibrary, saveBarcodePng, type PickedPhoto } from "../utils/inventoryPhoto";
+import {
+  openFallbackTab,
+  pickItemPhotoFromCamera,
+  pickItemPhotoFromLibrary,
+  saveBarcodePng,
+  type PickedPhoto,
+} from "../utils/inventoryPhoto";
 
 // The barcode inventory tab: a catalog of physical items sorted into
 // categories, each wearing a locally-generated barcode (see
@@ -178,11 +184,20 @@ export default function InventoryScreen() {
   }
 
   async function saveBarcode(item: InventoryItem) {
+    // Must happen before any `await` below — see openFallbackTab's own
+    // comment for why a blank tab opened any later gets silently blocked
+    // as an unrequested popup instead of working as the iOS Safari
+    // fallback it's there for.
+    const fallbackTab = openFallbackTab();
     try {
       const uri = await barcodeRef.current?.capture();
-      if (!uri) return;
-      await saveBarcodePng(uri, item.name || item.barcode);
+      if (!uri) {
+        fallbackTab?.close();
+        return;
+      }
+      await saveBarcodePng(uri, item.name || item.barcode, fallbackTab);
     } catch (e) {
+      fallbackTab?.close();
       setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not save barcode" });
     }
   }
