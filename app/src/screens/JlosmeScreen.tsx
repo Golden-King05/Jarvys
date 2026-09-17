@@ -6,6 +6,7 @@ import OsmEditorMap, {
   type EditorMode,
   type OsmEditorMapHandle,
   type WayDraftPoint,
+  type WayHookTarget,
 } from "../components/OsmEditorMap";
 import RelationEditor from "../components/RelationEditor";
 import OsmUploadPanel from "../components/OsmUploadPanel";
@@ -380,7 +381,7 @@ export default function JlosmeScreen() {
     downloadArea({ kind: "bbox", ...bounds });
   }
 
-  async function handleCreateNode(lat: number, lon: number) {
+  async function handleCreateNode(lat: number, lon: number, hook?: WayHookTarget) {
     if (!token) return;
     try {
       // A redraw is loaded (see armSavedRedrawId) — reattach this new
@@ -395,6 +396,7 @@ export default function JlosmeScreen() {
       }
       const el = await api.createOsmEditorElement(baseUrl, token, { type: "node", tags: {}, geometry: { lat, lon } });
       upsertElement(el);
+      if (hook) await hookNodeIntoWay(hook, el.id);
       // The unified "+" mode places a single pending point and commits it
       // as a standalone node once finished — unlike the explicit
       // "new-node" mode (repeat taps, stays active until Done), placing
@@ -403,6 +405,24 @@ export default function JlosmeScreen() {
     } catch (e) {
       setStatusMessage({ kind: "error", text: e instanceof Error ? e.message : "Could not create node" });
     }
+  }
+
+  // Splices a newly placed node into an existing way's line — "hooking" a
+  // new point onto a way (a stop sign, a driveway, a branching path) at a
+  // precise spot along it, without needing to redraw the whole way. Finds
+  // the same two original neighbor node ids the tap snapped between (see
+  // WayHookTarget), not a raw array index, which the insertion would shift,
+  // so this stays correct however many other edits have happened since.
+  async function hookNodeIntoWay(hook: WayHookTarget, newNodeId: number) {
+    if (!token) return;
+    const way = elements.find((el) => el.type === "way" && el.id === hook.wayId);
+    if (!way) return;
+    const nodeIds = wayGeometry(way).nodeIds;
+    const idx = nodeIds.findIndex((id, i) => id === hook.nodeIdA && nodeIds[i + 1] === hook.nodeIdB);
+    if (idx === -1) return; // the way's geometry moved on since the hook was found — skip rather than corrupt it
+    const nextNodeIds = [...nodeIds.slice(0, idx + 1), newNodeId, ...nodeIds.slice(idx + 1)];
+    const updatedWay = await api.patchOsmEditorElement(baseUrl, token, "way", hook.wayId, { geometry: { nodeIds: nextNodeIds } });
+    upsertElement(updatedWay);
   }
 
   // `closeLoop`: used by the AI building tracer's closed-polygon draft —
@@ -421,6 +441,19 @@ export default function JlosmeScreen() {
       // ghost-guide overlay to keep — reattached below rather than
       // deleted along with the rest of the way's old, now-orphaned nodes.
       const reattachedNodeIds = new Set<number>();
+      // Local working copies of any way this draw hooks a new point into
+      // (see WayHookTarget) — several points can hook into the same way,
+      // each needing to see the previous one's insertion well before any
+      // of it reaches component state, so every hooked way is patched
+      // once at the end instead of mid-loop.
+      const hookedWayNodeIds = new Map<number, number[]>();
+      function workingNodeIds(wayId: number): number[] {
+        if (!hookedWayNodeIds.has(wayId)) {
+          const way = elements.find((el) => el.type === "way" && el.id === wayId);
+          hookedWayNodeIds.set(wayId, way ? [...wayGeometry(way).nodeIds] : []);
+        }
+        return hookedWayNodeIds.get(wayId)!;
+      }
       for (const p of points) {
         if ("existingId" in p) {
           nodeIds.push(p.existingId);
@@ -437,10 +470,19 @@ export default function JlosmeScreen() {
           });
           upsertElement(node);
           nodeIds.push(node.id);
+          if (p.hook) {
+            const list = workingNodeIds(p.hook.wayId);
+            const idx = list.findIndex((id, i) => id === p.hook!.nodeIdA && list[i + 1] === p.hook!.nodeIdB);
+            if (idx !== -1) list.splice(idx + 1, 0, node.id);
+          }
         }
       }
       if (closeLoop && nodeIds.length >= 3) {
         nodeIds.push(nodeIds[0]);
+      }
+      for (const [wayId, finalNodeIds] of hookedWayNodeIds) {
+        const updatedWay = await api.patchOsmEditorElement(baseUrl, token, "way", wayId, { geometry: { nodeIds: finalNodeIds } });
+        upsertElement(updatedWay);
       }
       // The new nodes are genuinely new either way — only the *way's own*
       // identity carries forward from the parked id when redrawing.
@@ -609,11 +651,11 @@ export default function JlosmeScreen() {
     mode === "draw-boundary"
       ? "Tap the map to add boundary points, then Finish."
       : mode === "add"
-        ? "Tap the map to place a point. Tap + again to keep just that one node, or keep tapping to build a way — tap its highlighted starting point to close it into an area."
+        ? "Tap the map to place a point — near an existing way hooks onto it. Tap + again to keep just that one node, or keep tapping to build a way — tap its highlighted starting point to close it into an area."
         : mode === "new-way"
-          ? `Tap existing nodes or empty space to build a way, then Finish. Tap its highlighted starting point to close it into an area.${redrawSuffix}`
+          ? `Tap existing nodes, or near a way's line to hook onto it, or empty space to build a way, then Finish. Tap its highlighted starting point to close it into an area.${redrawSuffix}`
           : mode === "new-node"
-            ? `Tap the map to add nodes.${redrawSuffix}`
+            ? `Tap the map to add nodes — near an existing way hooks onto it.${redrawSuffix}`
             : mode === "ai-trace-building"
               ? (aiTraceMessage ?? "Click inside a building's outline (zoom in for best results). Traced automatically with MobileSAM.")
               : mode === "ai-trace-road"

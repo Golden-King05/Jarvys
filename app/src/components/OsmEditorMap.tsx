@@ -44,22 +44,41 @@ export type EditorMode =
   | "ai-trace-stream";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
+// A new point that lands on an existing way's line gets "hooked" into
+// it — spliced into that way's own node list as a new shared vertex,
+// right between the two neighbors it snapped between — instead of just
+// sitting there unconnected. Identifies the segment by its two node ids
+// rather than a numeric array index, since inserting a node into the way
+// shifts every index after it; the id pair stays correct regardless.
+export interface WayHookTarget {
+  wayId: number;
+  nodeIdA: number;
+  nodeIdB: number;
+}
+
 // `reattachId`: a brand-new position that should nonetheless reuse a
 // parked tagged sub-node's real id (see redrawGuide below) — a modify of
 // that node, not a fresh create, so a point feature riding along a
 // redrawn way (a stop sign, a hydrant) keeps its own identity/tags/history
 // instead of losing them to a plain new geometry-only node.
-export type WayDraftPoint = { existingId: number } | { reattachId: number; lat: number; lon: number } | { lat: number; lon: number };
+// `hook`: set on a brand-new point that landed on an existing way's line —
+// see WayHookTarget.
+export type WayDraftPoint =
+  | { existingId: number }
+  | { reattachId: number; lat: number; lon: number }
+  | { lat: number; lon: number; hook?: WayHookTarget };
 
 // Maps the raw draft points into the shape onWayFinish expects — shared by
 // finishDraw (open way) and handleCloseLoop (area) below.
-function mapDraftPoints(pts: { lat: number; lon: number; existingId?: number; reattachId?: number }[]): WayDraftPoint[] {
+function mapDraftPoints(
+  pts: { lat: number; lon: number; existingId?: number; reattachId?: number; hook?: WayHookTarget }[]
+): WayDraftPoint[] {
   return pts.map((p) =>
     p.existingId !== undefined
       ? { existingId: p.existingId }
       : p.reattachId !== undefined
         ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
-        : { lat: p.lat, lon: p.lon }
+        : { lat: p.lat, lon: p.lon, hook: p.hook }
   );
 }
 
@@ -76,7 +95,9 @@ interface OsmEditorMapProps {
   mode: EditorMode;
   onBoundaryFinish: (points: { lat: number; lon: number }[]) => void;
   onWayFinish: (points: WayDraftPoint[], closeLoop?: boolean) => void;
-  onCreateNode: (lat: number, lon: number) => void;
+  // `hook`: set when the tap landed on an existing way's line — see
+  // WayHookTarget.
+  onCreateNode: (lat: number, lon: number, hook?: WayHookTarget) => void;
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
   // The three AI-assisted tracing tools (ai-trace-building, ai-trace-road,
   // ai-trace-stream) are web-only — see OsmEditorMap.web.tsx. Their toolbar
@@ -182,7 +203,9 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   ref
 ) {
   const mapRef = useRef<MapView>(null);
-  const [draftPoints, setDraftPoints] = useState<{ lat: number; lon: number; existingId?: number; reattachId?: number }[]>([]);
+  const [draftPoints, setDraftPoints] = useState<
+    { lat: number; lon: number; existingId?: number; reattachId?: number; hook?: WayHookTarget }[]
+  >([]);
 
   useEffect(() => {
     setDraftPoints([]);
@@ -195,13 +218,68 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   }, [elements]);
 
   function handleMapPress(lat: number, lon: number) {
-    if (mode === "draw-boundary" || mode === "new-way" || mode === "add") {
+    if (mode === "draw-boundary") {
       setDraftPoints((pts) => [...pts, { lat, lon }]);
+    } else if (mode === "new-way" || mode === "add") {
+      const hook = findWayHookTarget(lat, lon);
+      setDraftPoints((pts) => [...pts, hook ? { lat: hook.lat, lon: hook.lon, hook } : { lat, lon }]);
     } else if (mode === "new-node") {
-      onCreateNode(lat, lon);
+      const hook = findWayHookTarget(lat, lon);
+      onCreateNode(hook ? hook.lat : lat, hook ? hook.lon : lon, hook ?? undefined);
     } else {
       onSelectCandidates([]);
     }
+  }
+
+  // Same tolerance the web map uses for its own click-candidate/hook
+  // search, converted to real-world meters at the tap's own latitude/zoom
+  // since native has no direct pixel-space projection to work in (see
+  // insetRingMeters above).
+  const HOOK_TOLERANCE_PX = 18;
+
+  // Looks for the nearest way segment to a tapped lat/lon, within
+  // HOOK_TOLERANCE_PX — used while placing a new node/way vertex so it can
+  // be "hooked" into that way (spliced in as a new shared vertex, snapped
+  // exactly onto the line) instead of just sitting nearby, unconnected.
+  // Getting a new node onto an existing way this way is the whole point —
+  // otherwise there'd be no way to add a stop sign, a driveway, or a
+  // branching path at a precise point along a road that isn't already a
+  // node. Returns null if nothing's close enough.
+  function findWayHookTarget(lat: number, lon: number): (WayHookTarget & { lat: number; lon: number }) | null {
+    const metersPerDegLat = 111320;
+    const metersPerDegLon = 111320 * Math.cos((lat * Math.PI) / 180);
+    const toXY = (p: { lat: number; lon: number }) => ({ x: (p.lon - lon) * metersPerDegLon, y: (p.lat - lat) * metersPerDegLat });
+    const toleranceMeters = HOOK_TOLERANCE_PX * metersPerPixel(zoom, lat);
+    let best: (WayHookTarget & { lat: number; lon: number; dist: number }) | null = null;
+    for (const el of elements) {
+      if (el.type !== "way") continue;
+      const nodeIds = wayGeometry(el).nodeIds;
+      for (let i = 0; i < nodeIds.length - 1; i++) {
+        const n1 = nodesById.get(nodeIds[i]);
+        const n2 = nodesById.get(nodeIds[i + 1]);
+        if (!n1 || !n2) continue;
+        const p1 = toXY(nodeGeometry(n1));
+        const p2 = toXY(nodeGeometry(n2));
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const lengthSq = dx * dx + dy * dy;
+        const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, (-p1.x * dx + -p1.y * dy) / lengthSq));
+        const sx = p1.x + t * dx;
+        const sy = p1.y + t * dy;
+        const dist = Math.hypot(sx, sy);
+        if (dist <= toleranceMeters && (!best || dist < best.dist)) {
+          best = {
+            wayId: el.id,
+            nodeIdA: nodeIds[i],
+            nodeIdB: nodeIds[i + 1],
+            lat: lat + sy / metersPerDegLat,
+            lon: lon + sx / metersPerDegLon,
+            dist,
+          };
+        }
+      }
+    }
+    return best;
   }
 
   function handleNodePress(id: number, lat: number, lon: number) {
@@ -210,6 +288,23 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       return;
     }
     onSelectCandidates([osmEditorElementKey("node", id)]);
+  }
+
+  // A way's own rendered line/fill was pressed. While placing a node/way,
+  // this should hook into that way the same as a press landing just next
+  // to it (handleMapPress's own findWayHookTarget search), not select the
+  // way instead. `coordinate` isn't reliably present on every platform for
+  // a Polyline/Polygon press event (missing on at least iOS+Google Maps —
+  // see react-native-maps' own PolylinePressEvent typing), in which case
+  // there's no way to tell where on the way this landed, so it's a silent
+  // no-op there rather than guessing; tapping just off the line instead
+  // always gets a real coordinate via the map's own onPress.
+  function handleWayPress(wayId: number, coordinate?: { latitude: number; longitude: number }) {
+    if (mode === "new-way" || mode === "add" || mode === "new-node") {
+      if (coordinate) handleMapPress(coordinate.latitude, coordinate.longitude);
+      return;
+    }
+    onSelectCandidates([osmEditorElementKey("way", wayId)]);
   }
 
   // A tagged redraw-guide marker was pressed (see redrawGuide) — adds a
@@ -241,7 +336,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
           // The single "+" mode: one pending point alone becomes a
           // standalone node, two or more become an (open) way.
           if (draftPoints.length === 1) {
-            onCreateNode(draftPoints[0].lat, draftPoints[0].lon);
+            onCreateNode(draftPoints[0].lat, draftPoints[0].lon, draftPoints[0].hook);
           } else if (draftPoints.length >= 2) {
             onWayFinish(mapDraftPoints(draftPoints));
           }
@@ -304,7 +399,8 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // JOSM only tints a band near an area's outline rather than
             // solid-filling the whole interior, so a big polygon doesn't
             // fully hide the imagery underneath — see insetRingMeters above.
-            const onPress = () => onSelectCandidates([osmEditorElementKey("way", el.id)]);
+            const onPress = (e: { nativeEvent: { coordinate?: { latitude: number; longitude: number } } }) =>
+              handleWayPress(el.id, e.nativeEvent.coordinate);
             const hole = insetRingMeters(latlngs, AREA_FILL_BAND_PX, zoom);
             return (
               <React.Fragment key={key}>
@@ -334,7 +430,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
               strokeColor={color}
               strokeWidth={selected ? 5 : 3}
               tappable
-              onPress={() => onSelectCandidates([osmEditorElementKey("way", el.id)])}
+              onPress={(e) => handleWayPress(el.id, e.nativeEvent.coordinate)}
             />
           );
         })}
@@ -445,9 +541,12 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             </Marker>
           );
         }
+        // A point that snapped onto an existing way's line (see
+        // findWayHookTarget) gets an orange ring — confirms at a glance
+        // that it hooked in rather than just landing nearby unconnected.
         return (
           <Marker key={`draft-${i}`} coordinate={{ latitude: p.lat, longitude: p.lon }} anchor={{ x: 0.5, y: 0.5 }}>
-            <View style={[styles.draftDot, { backgroundColor: draftColor }]} />
+            <View style={[styles.draftDot, { backgroundColor: draftColor }, p.hook && styles.draftDotHooked]} />
           </Marker>
         );
       })}
@@ -461,6 +560,7 @@ const styles = StyleSheet.create({
   nodeDot: { borderWidth: 1.5 },
   nodeBadge: { backgroundColor: "#fff", borderWidth: 2, alignItems: "center", justifyContent: "center" },
   draftDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: "#fff" },
+  draftDotHooked: { width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: "#e67e22" },
   draftDotClosable: { width: 16, height: 16, borderRadius: 8, borderWidth: 3, backgroundColor: "#fff" },
   redrawGuideDot: {
     width: 12,

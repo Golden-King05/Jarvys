@@ -499,3 +499,26 @@ export function pointToSegmentDistance(px: number, py: number, ax: number, ay: n
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
+
+// Same idea as pointToSegmentDistance but also returns the actual closest
+// point on the segment, not just the distance to it — used to snap a new
+// node exactly onto a way's line when "hooking" it into that way (see
+// OsmEditorMap's findWayHookTarget) rather than leaving it sitting
+// slightly off to one side.
+export function closestPointOnSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): { x: number; y: number; dist: number } {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) return { x: ax, y: ay, dist: Math.hypot(px - ax, py - ay) };
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  const x = ax + t * dx;
+  const y = ay + t * dy;
+  return { x, y, dist: Math.hypot(px - x, py - y) };
+}

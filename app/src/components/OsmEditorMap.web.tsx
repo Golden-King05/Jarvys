@@ -5,6 +5,7 @@ import { OSM_ATTRIBUTION, OSM_TILE_URL, SATELLITE_ATTRIBUTION, SATELLITE_TILE_UR
 import { USGS_LIDAR_ATTRIBUTION, USGS_LIDAR_TILE_URL } from "../utils/lidar";
 import {
   areaFillColor,
+  closestPointOnSegment,
   nodeGeometry,
   nodeIconGlyph,
   nodeVisibilityAtZoom,
@@ -67,6 +68,18 @@ export type EditorMode =
   | "ai-trace-stream";
 export type EditorBaseLayer = "osm" | "satellite" | "bing";
 
+// A new point that lands on an existing way's line gets "hooked" into
+// it — spliced into that way's own node list as a new shared vertex,
+// right between the two neighbors it snapped between — instead of just
+// sitting there unconnected. Identifies the segment by its two node ids
+// rather than a numeric array index, since inserting a node into the way
+// shifts every index after it; the id pair stays correct regardless.
+export interface WayHookTarget {
+  wayId: number;
+  nodeIdA: number;
+  nodeIdB: number;
+}
+
 // One vertex picked while drawing a new way — either a reference to an
 // already-existing node (clicked on the map) or a brand-new point (clicked
 // on empty space), which the caller creates as a new node before creating
@@ -76,7 +89,12 @@ export type EditorBaseLayer = "osm" | "satellite" | "bing";
 // that node, not a fresh create, so a point feature riding along a
 // redrawn way (a stop sign, a hydrant) keeps its own identity/tags/history
 // instead of losing them to a plain new geometry-only node.
-export type WayDraftPoint = { existingId: number } | { reattachId: number; lat: number; lon: number } | { lat: number; lon: number };
+// `hook`: set on a brand-new point that landed on an existing way's line —
+// see WayHookTarget.
+export type WayDraftPoint =
+  | { existingId: number }
+  | { reattachId: number; lat: number; lon: number }
+  | { lat: number; lon: number; hook?: WayHookTarget };
 
 interface OsmEditorMapProps {
   elements: OsmEditorElement[];
@@ -95,7 +113,9 @@ interface OsmEditorMapProps {
   // tracer's closed-polygon draft) — the manual "new way" tool never sets
   // this.
   onWayFinish: (points: WayDraftPoint[], closeLoop?: boolean) => void;
-  onCreateNode: (lat: number, lon: number) => void;
+  // `hook`: set when the tap landed on an existing way's line — see
+  // WayHookTarget.
+  onCreateNode: (lat: number, lon: number, hook?: WayHookTarget) => void;
   onNodeDragEnd: (id: number, lat: number, lon: number) => void;
   // Reports progress/state for the two AI-assisted tracing tools so
   // JlosmeScreen can show the right mode-banner text/buttons without
@@ -172,10 +192,15 @@ function nodeIcon(L: Leaflet, color: string, selected: boolean, tags: Record<str
 // enough points to close it into an area — rendered larger/hollow (rather
 // than the plain filled dot) so it reads as its own tappable target, not
 // just another vertex.
-function draftVertexIcon(L: Leaflet, color: string, closable = false) {
+// `hooked`: this point snapped onto an existing way's line (see
+// findWayHookTarget) — an orange ring around the dot confirms that at a
+// glance, distinct from a plain new point going nowhere in particular.
+function draftVertexIcon(L: Leaflet, color: string, closable = false, hooked = false) {
   const html = closable
     ? `<div style="width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid ${color};transform:translate(-50%,-50%)"></div>`
-    : `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:2px solid #fff;transform:translate(-50%,-50%)"></div>`;
+    : hooked
+      ? `<div style="width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #e67e22;transform:translate(-50%,-50%)"></div>`
+      : `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:2px solid #fff;transform:translate(-50%,-50%)"></div>`;
   return L.divIcon({ html, className: "", iconSize: [0, 0] });
 }
 
@@ -326,7 +351,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
   // here would work too, but this keeps click handling and draft rendering
   // in one place without fighting stale-closure issues from Leaflet's own
   // event callbacks.
-  const draftPoints = useRef<{ lat: number; lon: number; existingId?: number; reattachId?: number }[]>([]);
+  const draftPoints = useRef<{ lat: number; lon: number; existingId?: number; reattachId?: number; hook?: WayHookTarget }[]>([]);
 
   const nodesById = useMemo(() => {
     const map = new Map<number, OsmEditorElement>();
@@ -379,6 +404,37 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     onSelectCandidatesRef.current(scored.map((s) => s.key));
   }
 
+  // Looks for the nearest way segment to a click, within
+  // SELECT_TOLERANCE_PX — used while placing a new node/way vertex so it
+  // can be "hooked" into that way (spliced in as a new shared vertex,
+  // snapped exactly onto the line) instead of just sitting nearby,
+  // unconnected. Getting a new node onto an existing way this way is the
+  // whole point — otherwise there'd be no way to add a stop sign, a
+  // driveway, or a branching path at a precise point along a road that
+  // isn't already a node. Returns null if nothing's close enough.
+  function findWayHookTarget(map: Leaflet, containerPoint: { x: number; y: number }): (WayHookTarget & { lat: number; lon: number }) | null {
+    let best: (WayHookTarget & { lat: number; lon: number; dist: number }) | null = null;
+    for (const el of elementsRef.current) {
+      if (el.type !== "way") continue;
+      const nodeIds = wayGeometry(el).nodeIds;
+      for (let i = 0; i < nodeIds.length - 1; i++) {
+        const n1 = nodesByIdRef.current.get(nodeIds[i]);
+        const n2 = nodesByIdRef.current.get(nodeIds[i + 1]);
+        if (!n1 || !n2) continue;
+        const g1 = nodeGeometry(n1);
+        const g2 = nodeGeometry(n2);
+        const p1 = map.latLngToContainerPoint([g1.lat, g1.lon]);
+        const p2 = map.latLngToContainerPoint([g2.lat, g2.lon]);
+        const { x, y, dist } = closestPointOnSegment(containerPoint.x, containerPoint.y, p1.x, p1.y, p2.x, p2.y);
+        if (dist <= SELECT_TOLERANCE_PX && (!best || dist < best.dist)) {
+          const snapped = map.containerPointToLatLng([x, y]);
+          best = { wayId: el.id, nodeIdA: nodeIds[i], nodeIdB: nodeIds[i + 1], lat: snapped.lat, lon: snapped.lng, dist };
+        }
+      }
+    }
+    return best;
+  }
+
   function redrawDraft(L: Leaflet) {
     const layer = draftLayerRef.current;
     if (!layer) return;
@@ -399,7 +455,10 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
     const canClose = (modeRef.current === "new-way" || modeRef.current === "add") && pts.length >= 3;
     pts.forEach((p, i) => {
       const closable = canClose && i === 0;
-      const marker = L.marker([p.lat, p.lon], { icon: draftVertexIcon(L, color, closable), interactive: closable }).addTo(layer);
+      const marker = L.marker([p.lat, p.lon], {
+        icon: draftVertexIcon(L, color, closable, Boolean(p.hook)),
+        interactive: closable,
+      }).addTo(layer);
       if (closable) {
         marker.on("click", (e: { originalEvent: Event }) => {
           L.DomEvent.stopPropagation(e);
@@ -411,13 +470,15 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
 
   // Maps the raw draft points into the shape onWayFinish expects — shared
   // by finishDraw (open way) and closeLoop (area) below.
-  function mapDraftPoints(pts: { lat: number; lon: number; existingId?: number; reattachId?: number }[]): WayDraftPoint[] {
+  function mapDraftPoints(
+    pts: { lat: number; lon: number; existingId?: number; reattachId?: number; hook?: WayHookTarget }[]
+  ): WayDraftPoint[] {
     return pts.map((p) =>
       p.existingId !== undefined
         ? { existingId: p.existingId }
         : p.reattachId !== undefined
           ? { reattachId: p.reattachId, lat: p.lat, lon: p.lon }
-          : { lat: p.lat, lon: p.lon }
+          : { lat: p.lat, lon: p.lon, hook: p.hook }
     );
   }
 
@@ -618,10 +679,17 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       draftPoints.current = [...draftPoints.current, { lat, lon }];
       redrawDraft(L);
     } else if (m === "new-way" || m === "add") {
-      draftPoints.current = [...draftPoints.current, { lat, lon }];
+      // Landed on (or near) an existing way's line rather than empty
+      // space — hook the new point into it instead of leaving it
+      // unconnected. This is what lets a way branch off an existing one,
+      // or a new point join a road at a precise spot that isn't already a
+      // node — see findWayHookTarget.
+      const hook = mapInstance.current ? findWayHookTarget(mapInstance.current, containerPoint) : null;
+      draftPoints.current = [...draftPoints.current, hook ? { lat: hook.lat, lon: hook.lon, hook } : { lat, lon }];
       redrawDraft(L);
     } else if (m === "new-node") {
-      onCreateNodeRef.current(lat, lon);
+      const hook = mapInstance.current ? findWayHookTarget(mapInstance.current, containerPoint) : null;
+      onCreateNodeRef.current(hook ? hook.lat : lat, hook ? hook.lon : lon, hook ?? undefined);
     } else if (m === "ai-trace-building") {
       runBuildingTrace(L, mapInstance.current, { lat, lng: lon }, containerPoint);
     } else if (m === "ai-trace-road" || m === "ai-trace-stream") {
@@ -659,7 +727,7 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
       // The single "+" mode: one pending point alone becomes a standalone
       // node, two or more become an (open) way — see EditorMode's comment.
       if (pts.length === 1) {
-        onCreateNodeRef.current(pts[0].lat, pts[0].lon);
+        onCreateNodeRef.current(pts[0].lat, pts[0].lon, pts[0].hook);
       } else if (pts.length >= 2) {
         onWayFinishRef.current(mapDraftPoints(pts));
       }
@@ -829,7 +897,19 @@ const OsmEditorMap = React.forwardRef<OsmEditorMapHandle, OsmEditorMapProps>(fun
             // own click handler below still ran right after and deselected
             // whatever was just selected in the same tick.
             L.DomEvent.stopPropagation(e);
-            if (mapInstance.current) selectAt(mapInstance.current, e.containerPoint);
+            if (!mapInstance.current) return;
+            const m = modeRef.current;
+            if (m === "new-way" || m === "add" || m === "new-node") {
+              // While placing a node/way, a tap that lands directly on a
+              // way's own rendered line should hook into it the same as
+              // one landing just next to it (handleMapClick's own
+              // findWayHookTarget search) — not select the way instead,
+              // which is what this same click would otherwise do.
+              const latlng = mapInstance.current.containerPointToLatLng([e.containerPoint.x, e.containerPoint.y]);
+              handleMapClick(L, latlng.lat, latlng.lng, e.containerPoint);
+              return;
+            }
+            selectAt(mapInstance.current, e.containerPoint);
           };
 
           if (areal && closed) {
