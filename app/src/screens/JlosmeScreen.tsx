@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import Slider from "@react-native-community/slider";
 import OsmEditorMap, {
   type EditorBaseLayer,
@@ -65,6 +77,15 @@ type SavedRedrawRecord = {
 export default function JlosmeScreen() {
   const { baseUrl, token } = useAuth();
   const mapRef = useRef<OsmEditorMapHandle>(null);
+  // The floating toolbar/banners are sized for a phone's edge-to-edge width
+  // — stretched the same way across a desktop browser window they'd read as
+  // an unstyled mobile page rather than a real desktop app, so past this
+  // width they switch to a capped, centered pill instead (see
+  // styles.toolbarWide/bannerWide below). Threshold sits comfortably above
+  // any phone (including landscape) or the iPhone 13 used in this app's own
+  // Playwright coverage.
+  const { width: windowWidth } = useWindowDimensions();
+  const isWideScreen = windowWidth >= 700;
 
   const [elements, setElements] = useState<OsmEditorElement[]>([]);
   const [tagDefinitions, setTagDefinitions] = useState<TagDefinition[]>([]);
@@ -691,7 +712,7 @@ export default function JlosmeScreen() {
         ) : null}
 
         {modeBannerText ? (
-          <View style={styles.modeBanner}>
+          <View style={[styles.modeBanner, isWideScreen && styles.bannerWide]}>
             <Text style={styles.modeBannerText}>{modeBannerText}</Text>
             <View style={styles.modeBannerButtons}>
               {mode !== "new-node" && !aiTraceBusy ? (
@@ -724,7 +745,13 @@ export default function JlosmeScreen() {
         ) : null}
 
         {statusMessage ? (
-          <View style={[styles.statusBanner, statusMessage.kind === "error" && styles.statusBannerError]}>
+          <View
+            style={[
+              styles.statusBanner,
+              statusMessage.kind === "error" && styles.statusBannerError,
+              isWideScreen && styles.bannerWide,
+            ]}
+          >
             <Text style={styles.statusBannerText}>{statusMessage.text}</Text>
             <TouchableOpacity onPress={() => setStatusMessage(null)} hitSlop={8}>
               <Text style={styles.statusBannerClose}>✕</Text>
@@ -733,7 +760,7 @@ export default function JlosmeScreen() {
         ) : null}
 
         {busy ? (
-          <View style={styles.busyBanner}>
+          <View style={[styles.busyBanner, isWideScreen && styles.bannerWide]}>
             <ActivityIndicator size="small" />
             <Text style={[styles.busyText, styles.busyTextFlex]}>
               {busy}
@@ -747,7 +774,7 @@ export default function JlosmeScreen() {
           </View>
         ) : null}
 
-        <View style={styles.toolbar}>
+        <View style={[styles.toolbar, isWideScreen && styles.toolbarWide]}>
           <TouchableOpacity
             style={[styles.toolbarButton, mode === "draw-boundary" && styles.toolbarButtonActive]}
             onPress={() => toggleMode("draw-boundary")}
@@ -918,7 +945,15 @@ export default function JlosmeScreen() {
         animationType="fade"
         onRequestClose={() => selectSingle(null)}
       >
-        <View style={styles.overlay}>
+        {/* Every modal below wraps its overlay in KeyboardAvoidingView —
+            several (this one via TagsEditor, the relation editor, the
+            upload panel) hold TextInputs, and on iOS a plain vertically
+            centered card doesn't shift for the keyboard on its own, so a
+            field near the bottom of a long one (e.g. the tags list) can end
+            up hidden behind it. behavior="padding" recenters the card in
+            whatever space is left; it's a no-op (and thus harmless) on web,
+            where the browser already handles this itself. */}
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             {selectedElement ? (
               <ScrollView>
@@ -981,7 +1016,7 @@ export default function JlosmeScreen() {
               </ScrollView>
             ) : null}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Relation editor */}
@@ -991,7 +1026,7 @@ export default function JlosmeScreen() {
         animationType="fade"
         onRequestClose={() => selectSingle(null)}
       >
-        <View style={styles.overlay}>
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             {selectedElement && selectedElement.type === "relation" ? (
               <RelationEditor
@@ -1005,12 +1040,12 @@ export default function JlosmeScreen() {
               />
             ) : null}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Relations list */}
       <Modal visible={showRelations} transparent animationType="fade" onRequestClose={() => setShowRelations(false)}>
-        <View style={styles.overlay}>
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle}>Relations</Text>
@@ -1049,14 +1084,14 @@ export default function JlosmeScreen() {
               <Text style={styles.newRelationButtonText}>+ New relation</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Saved IDs — elements parked for a full redraw (see savedRedrawIds
           above); pick one to load it as the target for the next new-node
           placement or new-way finish. */}
       <Modal visible={showSavedIds} transparent animationType="fade" onRequestClose={() => setShowSavedIds(false)}>
-        <View style={styles.overlay}>
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle}>Saved IDs</Text>
@@ -1097,12 +1132,12 @@ export default function JlosmeScreen() {
               ))}
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Imagery picker */}
       <Modal visible={showImagery} transparent animationType="fade" onRequestClose={() => setShowImagery(false)}>
-        <View style={styles.overlay}>
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle}>Imagery</Text>
@@ -1163,12 +1198,12 @@ export default function JlosmeScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Upload panel */}
       <Modal visible={showUpload} transparent animationType="fade" onRequestClose={() => setShowUpload(false)}>
-        <View style={styles.overlay}>
+        <KeyboardAvoidingView style={styles.overlay} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.card}>
             <OsmUploadPanel
               dirtyCount={dirtyCount}
@@ -1180,7 +1215,7 @@ export default function JlosmeScreen() {
               }}
             />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1218,6 +1253,14 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 1000,
   },
+  // Applied on top of modeBanner/statusBanner/busyBanner past isWideScreen
+  // — stretching these edge-to-edge the same way on a wide desktop window
+  // reads as an unstyled mobile page, so past that width they cap to a
+  // compact, centered pill instead (margin: "auto" is Yoga's supported
+  // centering trick for absolutely positioned elements, same as plain
+  // CSS). Still clear of the imagery button at any width this applies at
+  // (>=700), so no separate right offset is needed here.
+  bannerWide: { left: 0, right: 0, maxWidth: 460, marginLeft: "auto", marginRight: "auto" },
   modeBannerText: { fontFamily: fonts.medium, fontSize: 12, color: "#222", flex: 1, marginRight: 8 },
   modeBannerButtons: { flexDirection: "row", gap: 14 },
   modeBannerFinish: { fontFamily: fonts.semiBold, fontSize: 13, color: "#2980b9" },
@@ -1282,6 +1325,10 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 1000,
   },
+  // Same reasoning as bannerWide above — past isWideScreen the toolbar caps
+  // to a centered pill instead of stretching across the whole window, and
+  // its buttons center within that pill rather than hugging the left edge.
+  toolbarWide: { left: 0, right: 0, maxWidth: 560, marginLeft: "auto", marginRight: "auto", justifyContent: "center" },
   toolbarButton: { backgroundColor: "#f0f0f0", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   toolbarButtonActive: { backgroundColor: "#2980b9" },
   toolbarButtonDisabled: { opacity: 0.5 },
